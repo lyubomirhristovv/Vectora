@@ -4,5 +4,4 @@ public class UpdateConnectionDto
 {
     public string Name { get; set; } = string.Empty;
     public string? ConnectionString { get; set; }
-    public bool IsEmulator { get; set; }
 }

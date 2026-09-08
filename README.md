@@ -75,7 +75,7 @@ You need to set up at least one Service Bus connection, in order for the explore
 2. Press **Manage Connections**
 3. Press **Add Connection**
 4. Fill in **Connection Name** and **Connection String**
-5. [Optional] If you wish to set up Service Bus emulator connection, make sure to check the **This is an emulator connection** and provide the JSON configuration file of the emulator, as per the Microsoft documentation
+5. [Optional] For a Service Bus emulator connection, include `UseDevelopmentEmulator=true` in the connection string.
 6. Press **Save**
 7. You can now select the connection from the dropdown and see its entities
 

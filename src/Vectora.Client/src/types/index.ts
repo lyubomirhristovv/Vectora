@@ -142,7 +142,6 @@ export interface SubscriptionProperties {
 export interface CreateConnectionRequest {
   name: string;
   connectionString: string;
-  isEmulator: boolean;
 }
 
 export interface CreateQueueRequest {

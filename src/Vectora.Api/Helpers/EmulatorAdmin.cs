@@ -6,6 +6,20 @@ public static class EmulatorAdmin
 {
     public const int DefaultAdminPort = 5300;
 
+    public static bool IsEmulatorConnectionString(string connectionString)
+    {
+        return connectionString
+            .Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment =>
+            {
+                var eq = segment.IndexOf('=');
+                return eq >= 0
+                    && segment[..eq].Trim().Equals("UseDevelopmentEmulator", StringComparison.OrdinalIgnoreCase)
+                    && bool.TryParse(segment[(eq + 1)..].Trim(), out var enabled)
+                    && enabled;
+            });
+    }
+
     public static string BuildAdminConnectionString(string connectionString, int adminPort = DefaultAdminPort)
     {
         var segments = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries);
