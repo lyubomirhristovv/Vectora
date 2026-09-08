@@ -62,7 +62,7 @@ SQLite via EF Core (`VectoraDbContext`). Database file is `{DataPath}/vectora.db
 3. Enables WAL journal mode and `busy_timeout = 5000` for concurrent-write resilience.
 
 Entities (each with a unique index on name/key):
-- `ServiceBusConnection` — saved Service Bus connections; `IsEmulator` selects the emulator admin-port rewrite.
+- `ServiceBusConnection` — saved Service Bus connections; `IsEmulator` selects the emulator admin-port rewrite. It is not user-set: `ConnectionRepository` derives it via `EmulatorAdmin.IsEmulatorConnectionString` (looks for `UseDevelopmentEmulator=true`) whenever a connection string is saved, and leaves it alone otherwise.
 - `Setting` — key/value app settings (e.g. `BatchOperationTimeoutSeconds`, clamped 10–600).
 - `MessageTemplate` — saved message bodies for resend.
 

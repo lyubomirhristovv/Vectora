@@ -31,7 +31,7 @@ public class ConnectionRepository : IConnectionRepository
         return await _db.Connections.FindAsync(id);
     }
 
-    public async Task<ServiceBusConnection> CreateAsync(string name, string connectionString, bool isEmulator)
+    public async Task<ServiceBusConnection> CreateAsync(string name, string connectionString)
     {
         // Append new connections at the end of the current ordering.
         var maxSortOrder = await _db.Connections.AnyAsync()
@@ -42,7 +42,7 @@ public class ConnectionRepository : IConnectionRepository
         {
             Name = name,
             ConnectionString = connectionString,
-            IsEmulator = isEmulator,
+            IsEmulator = EmulatorAdmin.IsEmulatorConnectionString(connectionString),
             SortOrder = maxSortOrder + 1
         };
         _db.Connections.Add(connection);
@@ -50,7 +50,7 @@ public class ConnectionRepository : IConnectionRepository
         return connection;
     }
 
-    public async Task<ServiceBusConnection?> UpdateAsync(int id, string name, string? connectionString, bool isEmulator)
+    public async Task<ServiceBusConnection?> UpdateAsync(int id, string name, string? connectionString)
     {
         var connection = await _db.Connections.FindAsync(id);
         if (connection == null)
@@ -59,11 +59,13 @@ public class ConnectionRepository : IConnectionRepository
         }
 
         connection.Name = name;
-        if (!string.IsNullOrEmpty(connectionString))
+        // Only re-derive when the string actually changes: a rename must not flip the mode of a
+        // connection saved before emulator detection existed.
+        if (!string.IsNullOrEmpty(connectionString) && connectionString != connection.ConnectionString)
         {
             connection.ConnectionString = connectionString;
+            connection.IsEmulator = EmulatorAdmin.IsEmulatorConnectionString(connectionString);
         }
-        connection.IsEmulator = isEmulator;
         connection.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
@@ -121,4 +123,3 @@ public class ConnectionRepository : IConnectionRepository
         return true;
     }
 }
-

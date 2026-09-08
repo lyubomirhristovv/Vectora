@@ -25,7 +25,7 @@ export default function ConnectionManager({ onClose }: ConnectionManagerProps) {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isAdding, setIsAdding] = useState(false);
-  const [formData, setFormData] = useState({ name: '', connectionString: '', isEmulator: false });
+  const [formData, setFormData] = useState({ name: '', connectionString: '' });
   const [error, setError] = useState('');
   const [draggingId, setDraggingId] = useState<number | null>(null);
 
@@ -86,7 +86,7 @@ export default function ConnectionManager({ onClose }: ConnectionManagerProps) {
       await loadData();
       setIsAdding(false);
       setEditingId(null);
-      setFormData({ name: '', connectionString: '', isEmulator: false });
+      setFormData({ name: '', connectionString: '' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     }
@@ -94,7 +94,7 @@ export default function ConnectionManager({ onClose }: ConnectionManagerProps) {
 
   const handleEdit = (conn: Connection) => {
     setEditingId(conn.id);
-    setFormData({ name: conn.name, connectionString: conn.connectionString, isEmulator: conn.isEmulator });
+    setFormData({ name: conn.name, connectionString: conn.connectionString });
     setIsAdding(false);
   };
 
@@ -111,13 +111,13 @@ export default function ConnectionManager({ onClose }: ConnectionManagerProps) {
   const handleAdd = () => {
     setIsAdding(true);
     setEditingId(null);
-    setFormData({ name: '', connectionString: '', isEmulator: false });
+    setFormData({ name: '', connectionString: '' });
   };
 
   const handleCancel = () => {
     setIsAdding(false);
     setEditingId(null);
-    setFormData({ name: '', connectionString: '', isEmulator: false });
+    setFormData({ name: '', connectionString: '' });
     setError('');
   };
 
@@ -304,8 +304,8 @@ export default function ConnectionManager({ onClose }: ConnectionManagerProps) {
 }
 
 interface ConnectionFormProps {
-  formData: { name: string; connectionString: string; isEmulator: boolean };
-  setFormData: React.Dispatch<React.SetStateAction<{ name: string; connectionString: string; isEmulator: boolean }>>;
+  formData: { name: string; connectionString: string };
+  setFormData: React.Dispatch<React.SetStateAction<{ name: string; connectionString: string }>>;
   onSave: () => void;
   onCancel: () => void;
 }
@@ -315,16 +315,9 @@ function ConnectionForm({ formData, setFormData, onSave, onCancel }: ConnectionF
     <div className="space-y-3">
       <input type="text" placeholder="Connection Name" value={formData.name} onChange={e => setFormData(d => ({ ...d, name: e.target.value }))} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
       <input type="text" placeholder="Connection String" value={formData.connectionString} onChange={e => setFormData(d => ({ ...d, connectionString: e.target.value }))} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
-      <label className="flex items-center gap-2 text-sm text-dark-300">
-        <input type="checkbox" checked={formData.isEmulator} onChange={e => setFormData(d => ({ ...d, isEmulator: e.target.checked }))} className="rounded border-dark-500" />
-        This is an emulator connection
-      </label>
-      {formData.isEmulator && (
-        <p className="text-xs text-dark-400">
-          Entities are read from the emulator's management API. Requires an Azure Service Bus Emulator
-          build that serves the management API (SDK 7.20 or newer).
-        </p>
-      )}
+      <p className="text-xs text-dark-400">
+        Connections containing <code>UseDevelopmentEmulator=true</code> use the emulator management API.
+      </p>
       <div className="flex gap-2">
         <button onClick={onSave} className="px-3 py-1.5 bg-primary-500 hover:bg-primary-400 text-white text-sm rounded-lg flex items-center gap-1"><Save className="w-3.5 h-3.5" /> Save</button>
         <button onClick={onCancel} className="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 text-white text-sm rounded-lg">Cancel</button>
