@@ -114,9 +114,6 @@ namespace Vectora.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<bool>("IsEmulator")
-                        .HasColumnType("INTEGER");
-
                     b.Property<bool>("McpAllowSend")
                         .HasColumnType("INTEGER");
 
