@@ -42,6 +42,7 @@ public class ConnectionRepository : IConnectionRepository
         {
             Name = name,
             ConnectionString = connectionString,
+            IsEmulator = EmulatorAdmin.IsEmulatorConnectionString(connectionString),
             SortOrder = maxSortOrder + 1
         };
         _db.Connections.Add(connection);
@@ -58,9 +59,12 @@ public class ConnectionRepository : IConnectionRepository
         }
 
         connection.Name = name;
-        if (!string.IsNullOrEmpty(connectionString))
+        // Only re-derive when the string actually changes: a rename must not flip the mode of a
+        // connection saved before emulator detection existed.
+        if (!string.IsNullOrEmpty(connectionString) && connectionString != connection.ConnectionString)
         {
             connection.ConnectionString = connectionString;
+            connection.IsEmulator = EmulatorAdmin.IsEmulatorConnectionString(connectionString);
         }
         connection.UpdatedAt = DateTime.UtcNow;
 

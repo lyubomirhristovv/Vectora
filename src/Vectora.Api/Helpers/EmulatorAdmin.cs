@@ -6,9 +6,22 @@ public static class EmulatorAdmin
 {
     public const int DefaultAdminPort = 5300;
 
+    // Emulator connection strings carry UseDevelopmentEmulator=true. Matched per segment rather than
+    // as a substring: the SDK accepts whitespace around the separator, and an explicit
+    // UseDevelopmentEmulator=false is a legal real-namespace connection string that must not match.
     public static bool IsEmulatorConnectionString(string connectionString)
     {
-        return connectionString.Contains("UseDevelopmentEmulator=true", StringComparison.OrdinalIgnoreCase);
+        foreach (var segment in connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var eq = segment.IndexOf('=');
+            if (eq < 0) continue;
+
+            var key = segment[..eq].Trim();
+            if (!key.Equals("UseDevelopmentEmulator", StringComparison.OrdinalIgnoreCase)) continue;
+
+            return bool.TryParse(segment[(eq + 1)..].Trim(), out var enabled) && enabled;
+        }
+        return false;
     }
 
     public static string BuildAdminConnectionString(string connectionString, int adminPort = DefaultAdminPort)
