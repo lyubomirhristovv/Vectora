@@ -8,16 +8,7 @@ public static class EmulatorAdmin
 
     public static bool IsEmulatorConnectionString(string connectionString)
     {
-        return connectionString
-            .Split(';', StringSplitOptions.RemoveEmptyEntries)
-            .Any(segment =>
-            {
-                var eq = segment.IndexOf('=');
-                return eq >= 0
-                    && segment[..eq].Trim().Equals("UseDevelopmentEmulator", StringComparison.OrdinalIgnoreCase)
-                    && bool.TryParse(segment[(eq + 1)..].Trim(), out var enabled)
-                    && enabled;
-            });
+        return connectionString.Contains("UseDevelopmentEmulator=true", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string BuildAdminConnectionString(string connectionString, int adminPort = DefaultAdminPort)
