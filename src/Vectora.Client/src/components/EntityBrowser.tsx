@@ -3,6 +3,8 @@ import { ChevronRight, ChevronDown, Inbox, MessageSquare, Users, Search, Plus, X
 import type { Connection, QueueInfo, TopicInfo, SubscriptionInfo, SelectedEntity, SearchHistoryEntry } from '../types';
 import { createQueue, createTopic, createSubscription, deleteQueue, deleteTopic, deleteSubscription, getSearchHistory, recordSearchHistory, setSearchHistoryFavorite, deleteSearchHistory } from '../api/client';
 import EditEntityDialog from './EditEntityDialog';
+import CreateEntityDialog from './CreateEntityDialog';
+import type { CreateEntityPayload } from './CreateEntityDialog';
 import { formatMessageCount } from '../utils/messageCounts';
 
 const subscriptionKey = (topicName: string, subName: string) => `${topicName}/${subName}`;
@@ -41,7 +43,6 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [searchHistoryOpen, setSearchHistoryOpen] = useState(false);
   const [createMode, setCreateMode] = useState<CreateMode>(null);
-  const [createName, setCreateName] = useState('');
   const [createTopicName, setCreateTopicName] = useState('');
   const [createError, setCreateError] = useState('');
   const [creating, setCreating] = useState(false);
@@ -241,32 +242,31 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
     t.subscriptions.some(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  const handleCreate = async () => {
-    if (!connection || !createName.trim()) return;
-    if (createMode === 'subscription' && !createTopicName) {
+  const handleCreate = async (payload: CreateEntityPayload) => {
+    if (!connection) return;
+    if (payload.type === 'subscription' && !payload.topicName) {
       setCreateError('Please select a topic');
       return;
     }
-    const name = createName.trim();
-    const topicForSub = createTopicName;
+    const name = payload.data.name;
     setCreating(true);
     setCreateError('');
     try {
-      if (createMode === 'queue') {
-        await createQueue(connection.id, { name });
-        setOptimisticQueues(prev => [...prev, { name, activeMessageCount: 0, deadLetterMessageCount: 0, isEmulator: connection.isEmulator, requiresSession: false }]);
+      if (payload.type === 'queue') {
+        await createQueue(connection.id, payload.data);
+        setOptimisticQueues(prev => [...prev, { name, activeMessageCount: 0, deadLetterMessageCount: 0, isEmulator: connection.isEmulator, requiresSession: payload.data.requiresSession ?? false }]);
         setPendingQueues(prev => new Set(prev).add(name));
-      } else if (createMode === 'topic') {
-        await createTopic(connection.id, { name });
+      } else if (payload.type === 'topic') {
+        await createTopic(connection.id, payload.data);
         setOptimisticTopics(prev => [...prev, { name, subscriptions: [], isEmulator: connection.isEmulator }]);
         setPendingTopics(prev => new Set(prev).add(name));
-      } else if (createMode === 'subscription') {
-        await createSubscription(connection.id, topicForSub, { name });
-        setOptimisticSubscriptions(prev => [...prev, { topicName: topicForSub, sub: { name, activeMessageCount: 0, deadLetterMessageCount: 0, requiresSession: false } }]);
+      } else {
+        const topicForSub = payload.topicName;
+        await createSubscription(connection.id, topicForSub, payload.data);
+        setOptimisticSubscriptions(prev => [...prev, { topicName: topicForSub, sub: { name, activeMessageCount: 0, deadLetterMessageCount: 0, requiresSession: payload.data.requiresSession ?? false } }]);
         setPendingSubscriptions(prev => new Set(prev).add(subscriptionKey(topicForSub, name)));
       }
       setCreateMode(null);
-      setCreateName('');
       setCreateTopicName('');
       onRefresh();
     } catch (err) {
@@ -278,7 +278,6 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
 
   const closeCreateDialog = () => {
     setCreateMode(null);
-    setCreateName('');
     setCreateTopicName('');
     setCreateError('');
   };
@@ -352,14 +351,6 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
-
-  // Close when a click starts on the backdrop (mousedown, so a drag that
-  // starts inside the dialog and ends outside doesn't close it)
-  const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget && e.button === 0) {
-      closeCreateDialog();
-    }
-  };
 
   const handleDeleteBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget && e.button === 0) {
@@ -569,57 +560,16 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
 
       {/* Create Entity Dialog */}
       {createMode && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onMouseDown={handleBackdropMouseDown}>
-          <div className="bg-dark-800 border border-dark-600 rounded-xl w-full max-w-sm p-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">
-                Create {createMode === 'queue' ? 'Queue' : createMode === 'topic' ? 'Topic' : 'Subscription'}
-              </h3>
-              <button onClick={closeCreateDialog} className="text-dark-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            {createError && (
-              <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">{createError}</div>
-            )}
-            {createMode === 'subscription' && (
-              <div className="mb-3">
-                <label className="block text-sm text-dark-400 mb-1">Topic</label>
-                <select
-                  value={createTopicName}
-                  onChange={e => setCreateTopicName(e.target.value)}
-                  className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="">Select topic...</option>
-                  {topics.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
-                </select>
-              </div>
-            )}
-            <div className="mb-4">
-              <label className="block text-sm text-dark-400 mb-1">Name</label>
-              <input
-                type="text"
-                value={createName}
-                onChange={e => setCreateName(e.target.value)}
-                placeholder={`Enter ${createMode} name`}
-                className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                autoFocus
-              />
-            </div>
-            <div className="flex gap-2 justify-end">
-              <button onClick={closeCreateDialog} className="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 text-white text-sm rounded-lg">
-                Cancel
-              </button>
-              <button
-                onClick={handleCreate}
-                disabled={creating || !createName.trim()}
-                className="px-3 py-1.5 bg-primary-500 hover:bg-primary-400 text-white text-sm rounded-lg disabled:opacity-50"
-              >
-                {creating ? 'Creating...' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <CreateEntityDialog
+          entityType={createMode}
+          queues={queues}
+          topics={topics}
+          initialTopicName={createTopicName}
+          creating={creating}
+          error={createError}
+          onClose={closeCreateDialog}
+          onCreate={handleCreate}
+        />
       )}
 
       {/* Delete Confirmation Dialog */}

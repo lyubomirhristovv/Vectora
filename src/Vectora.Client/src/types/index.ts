@@ -148,29 +148,46 @@ export interface CreateQueueRequest {
   name: string;
   defaultMessageTimeToLive?: string;
   lockDuration?: string;
+  autoDeleteOnIdle?: string;
+  duplicateDetectionHistoryTimeWindow?: string;
   maxDeliveryCount?: number;
+  maxSizeInMegabytes?: number;
   requiresDuplicateDetection?: boolean;
   requiresSession?: boolean;
   deadLetteringOnMessageExpiration?: boolean;
+  enableBatchedOperations?: boolean;
+  enablePartitioning?: boolean;
   forwardTo?: string;
   forwardDeadLetteredMessagesTo?: string;
+  userMetadata?: string;
 }
 
 export interface CreateTopicRequest {
   name: string;
   defaultMessageTimeToLive?: string;
+  autoDeleteOnIdle?: string;
+  duplicateDetectionHistoryTimeWindow?: string;
+  maxSizeInMegabytes?: number;
   requiresDuplicateDetection?: boolean;
+  enableBatchedOperations?: boolean;
+  enablePartitioning?: boolean;
+  supportOrdering?: boolean;
+  userMetadata?: string;
 }
 
 export interface CreateSubscriptionRequest {
   name: string;
   defaultMessageTimeToLive?: string;
   lockDuration?: string;
+  autoDeleteOnIdle?: string;
   maxDeliveryCount?: number;
   requiresSession?: boolean;
   deadLetteringOnMessageExpiration?: boolean;
+  deadLetteringOnFilterEvaluationExceptions?: boolean;
+  enableBatchedOperations?: boolean;
   forwardTo?: string;
   forwardDeadLetteredMessagesTo?: string;
+  userMetadata?: string;
 }
 
 export type EntityType = 'queue' | 'topic' | 'subscription';

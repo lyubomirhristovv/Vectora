@@ -1185,6 +1185,30 @@ public class ServiceBusService : IServiceBusService
         {
             options.ForwardDeadLetteredMessagesTo = dto.ForwardDeadLetteredMessagesTo;
         }
+        if (dto.AutoDeleteOnIdle.HasValue)
+        {
+            options.AutoDeleteOnIdle = dto.AutoDeleteOnIdle.Value;
+        }
+        if (dto.DuplicateDetectionHistoryTimeWindow.HasValue)
+        {
+            options.DuplicateDetectionHistoryTimeWindow = dto.DuplicateDetectionHistoryTimeWindow.Value;
+        }
+        if (dto.MaxSizeInMegabytes.HasValue)
+        {
+            options.MaxSizeInMegabytes = dto.MaxSizeInMegabytes.Value;
+        }
+        if (dto.EnableBatchedOperations.HasValue)
+        {
+            options.EnableBatchedOperations = dto.EnableBatchedOperations.Value;
+        }
+        if (dto.EnablePartitioning.HasValue)
+        {
+            options.EnablePartitioning = dto.EnablePartitioning.Value;
+        }
+        if (!string.IsNullOrEmpty(dto.UserMetadata))
+        {
+            options.UserMetadata = dto.UserMetadata;
+        }
         await adminClient.CreateQueueAsync(options);
         _entityCache.Invalidate(connectionId);
         return true;
@@ -1204,6 +1228,34 @@ public class ServiceBusService : IServiceBusService
         if (dto.RequiresDuplicateDetection.HasValue)
         {
             options.RequiresDuplicateDetection = dto.RequiresDuplicateDetection.Value;
+        }
+        if (dto.AutoDeleteOnIdle.HasValue)
+        {
+            options.AutoDeleteOnIdle = dto.AutoDeleteOnIdle.Value;
+        }
+        if (dto.DuplicateDetectionHistoryTimeWindow.HasValue)
+        {
+            options.DuplicateDetectionHistoryTimeWindow = dto.DuplicateDetectionHistoryTimeWindow.Value;
+        }
+        if (dto.MaxSizeInMegabytes.HasValue)
+        {
+            options.MaxSizeInMegabytes = dto.MaxSizeInMegabytes.Value;
+        }
+        if (dto.EnableBatchedOperations.HasValue)
+        {
+            options.EnableBatchedOperations = dto.EnableBatchedOperations.Value;
+        }
+        if (dto.EnablePartitioning.HasValue)
+        {
+            options.EnablePartitioning = dto.EnablePartitioning.Value;
+        }
+        if (dto.SupportOrdering.HasValue)
+        {
+            options.SupportOrdering = dto.SupportOrdering.Value;
+        }
+        if (!string.IsNullOrEmpty(dto.UserMetadata))
+        {
+            options.UserMetadata = dto.UserMetadata;
         }
         await adminClient.CreateTopicAsync(options);
         _entityCache.Invalidate(connectionId);
@@ -1244,6 +1296,22 @@ public class ServiceBusService : IServiceBusService
         if (!string.IsNullOrEmpty(dto.ForwardDeadLetteredMessagesTo))
         {
             options.ForwardDeadLetteredMessagesTo = dto.ForwardDeadLetteredMessagesTo;
+        }
+        if (dto.AutoDeleteOnIdle.HasValue)
+        {
+            options.AutoDeleteOnIdle = dto.AutoDeleteOnIdle.Value;
+        }
+        if (dto.DeadLetteringOnFilterEvaluationExceptions.HasValue)
+        {
+            options.EnableDeadLetteringOnFilterEvaluationExceptions = dto.DeadLetteringOnFilterEvaluationExceptions.Value;
+        }
+        if (dto.EnableBatchedOperations.HasValue)
+        {
+            options.EnableBatchedOperations = dto.EnableBatchedOperations.Value;
+        }
+        if (!string.IsNullOrEmpty(dto.UserMetadata))
+        {
+            options.UserMetadata = dto.UserMetadata;
         }
         await adminClient.CreateSubscriptionAsync(options);
         _entityCache.Invalidate(connectionId);
