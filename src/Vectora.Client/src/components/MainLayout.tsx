@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { LogOut, RefreshCw, ChevronDown, Check, Menu, X, Settings } from 'lucide-react';
+import { LogOut, RefreshCw, ChevronDown, Check, Menu, X, Settings, GripVertical } from 'lucide-react';
 import type { Connection, QueueInfo, TopicInfo, SelectedEntity } from '../types';
 import { getConnections, getEntities, getQueueRuntimeInfo, getSubscriptionRuntimeInfo, getSettings, updateSettings } from '../api/client';
 import { mergeMessageCount, type MessageCount } from '../utils/messageCounts';
@@ -24,6 +24,18 @@ import TourGuide, {
 } from './TourGuide';
 
 const LAST_CONNECTION_KEY = 'vectora_last_connection';
+
+// Draggable entity browser width (desktop only). Long queue/topic names need more room, but the
+// message panel's toolbar doesn't shrink gracefully, so the panel can only grow to twice its
+// default and never past half the window.
+const SIDEBAR_WIDTH_KEY = 'vectora_sidebar_width';
+const SIDEBAR_MIN_WIDTH = 320;
+const SIDEBAR_MAX_WIDTH = 640;
+
+const clampSidebarWidth = (width: number, containerWidth?: number) => {
+  const max = containerWidth ? Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, containerWidth / 2)) : SIDEBAR_MAX_WIDTH;
+  return Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, width));
+};
 
 const REFRESH_THROTTLE_MS = 5 * 60 * 1000;
 
@@ -74,6 +86,55 @@ export default function MainLayout({ onLogout, showLogout = true }: MainLayoutPr
   // so we can close it when the tour step changes away.
   const tourControlledDropdownRef = useRef(false);
   const isMobile = useIsMobile();
+
+  // Draggable splitter between the entity browser and the message panel (desktop only).
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = parseFloat(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? '');
+    return Number.isFinite(saved) ? clampSidebarWidth(saved) : SIDEBAR_MIN_WIDTH;
+  });
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const mainContentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingSidebar(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizingSidebar) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = mainContentRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setSidebarWidth(clampSidebarWidth(e.clientX - rect.left, rect.width));
+    };
+    const handleMouseUp = () => setIsResizingSidebar(false);
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingSidebar]);
+
+  // Keep the panel within bounds when the window (and so the container) shrinks.
+  useEffect(() => {
+    if (isMobile) return;
+    const handleResize = () => {
+      const rect = mainContentRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setSidebarWidth(width => clampSidebarWidth(width, rect.width));
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isMobile]);
 
   // Close mobile sidebar when entity is selected
   const handleSelectEntity = (entity: SelectedEntity | null) => {
@@ -530,7 +591,7 @@ export default function MainLayout({ onLogout, showLogout = true }: MainLayoutPr
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden min-h-0 relative">
+      <div ref={mainContentRef} className={`flex-1 flex overflow-hidden min-h-0 relative ${isResizingSidebar ? 'select-none' : ''}`}>
         {/* Mobile Sidebar Overlay */}
         {isMobile && showMobileSidebar && (
           <div
@@ -542,10 +603,11 @@ export default function MainLayout({ onLogout, showLogout = true }: MainLayoutPr
         {/* Entity Browser - Left Panel / Mobile Drawer */}
         <div
           data-tour="entity-browser"
+          style={isMobile ? undefined : { width: sidebarWidth }}
           className={`
           ${isMobile
             ? `absolute inset-y-0 left-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-in-out ${showMobileSidebar ? 'translate-x-0' : '-translate-x-full'}`
-            : 'w-80 relative'
+            : 'flex-none relative'
           }
           border-r border-dark-700 overflow-hidden flex flex-col bg-dark-950
         `}>
@@ -615,8 +677,20 @@ export default function MainLayout({ onLogout, showLogout = true }: MainLayoutPr
           />
         </div>
 
+        {/* Resize handle between the two panels - hidden on mobile */}
+        {!isMobile && (
+          <div
+            onMouseDown={handleSidebarResizeStart}
+            onDoubleClick={() => setSidebarWidth(SIDEBAR_MIN_WIDTH)}
+            title="Drag to resize. Double-click to reset."
+            className={`w-1 flex-none bg-dark-700 hover:bg-primary-500 cursor-col-resize flex items-center justify-center group transition-colors ${isResizingSidebar ? 'bg-primary-500' : ''}`}
+          >
+            <GripVertical className="w-3 h-3 text-dark-400 group-hover:text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+        )}
+
         {/* Message Panel - Right Panel / Full width on mobile */}
-        <div data-tour="message-panel" className="flex-1 overflow-hidden h-full">
+        <div data-tour="message-panel" className="flex-1 min-w-0 overflow-hidden h-full">
           <MessagePanel
             connection={effectiveConnection}
             selectedEntity={effectiveSelectedEntity}
