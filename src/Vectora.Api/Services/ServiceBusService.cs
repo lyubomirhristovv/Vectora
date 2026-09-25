@@ -415,6 +415,20 @@ public class ServiceBusService : IServiceBusService
 
         var subQueue = deadLetter ? SubQueue.DeadLetter : SubQueue.None;
         var client = _clientCache.GetClient(connectionId, connection.ConnectionString);
+
+        // A session-enabled entity rejects plain receivers, so the whole consume has to go through
+        // locked sessions instead (see ConsumeSessionMessagesAsync). A null result means the path
+        // doesn't take session receivers after all (emulator dead-letter sub-queues) — use a plain one.
+        if (await RequiresSessionAsync(connection, entityPath, subscriptionName))
+        {
+            var sessionTimeoutSeconds = await _settingsService.GetBatchOperationTimeoutSecondsAsync();
+            var sessionConsumed = await ConsumeSessionMessagesAsync(client, GetReceiverPath(entityPath, subscriptionName, deadLetter), maxMessages, DateTime.UtcNow + TimeSpan.FromSeconds(sessionTimeoutSeconds), cancellationToken);
+            if (sessionConsumed.HasValue)
+            {
+                return sessionConsumed;
+            }
+        }
+
         // PrefetchCount = 0 so the broker never hands us more than we ask for; prefetched-but-unwanted
         // messages would otherwise have their locks expire and skew the count.
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = subQueue, PrefetchCount = 0 };
@@ -487,6 +501,17 @@ public class ServiceBusService : IServiceBusService
         }
 
         var client = _clientCache.GetClient(connectionId, connection.ConnectionString);
+
+        if (await RequiresSessionAsync(connection, entityPath, subscriptionName))
+        {
+            var sessionTimeoutSeconds = await _settingsService.GetBatchOperationTimeoutSecondsAsync();
+            var sessionCompleted = await CompleteSessionMessagesBySequenceAsync(client, GetReceiverPath(entityPath, subscriptionName, deadLetter), sequenceSet, DateTime.UtcNow + TimeSpan.FromSeconds(sessionTimeoutSeconds), cancellationToken);
+            if (sessionCompleted.HasValue)
+            {
+                return sessionCompleted;
+            }
+        }
+
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = deadLetter ? SubQueue.DeadLetter : SubQueue.None, PrefetchCount = 0 };
         ServiceBusReceiver receiver = subscriptionName != null
             ? client.CreateReceiver(entityPath, subscriptionName, receiverOptions)
@@ -753,6 +778,246 @@ public class ServiceBusService : IServiceBusService
         return entityPath + (deadLetter ? "/$deadletterqueue" : "");
     }
 
+    // How long to wait for the broker to hand over the next session before concluding there are no
+    // more. AcceptNextSessionAsync otherwise blocks for the client's TryTimeout (60s by default).
+    private static readonly TimeSpan SessionAcceptTimeout = TimeSpan.FromSeconds(5);
+
+    // True when messages of this entity can only be received through a locked session. The entity
+    // cache already carries the flag for every enumerated entity; the admin lookup is the fallback
+    // for a cold cache.
+    private async Task<bool> RequiresSessionAsync(ServiceBusConnection connection, string entityPath, string? subscriptionName)
+    {
+        if (_entityCache.TryGet(connection.Id, out var cached))
+        {
+            if (subscriptionName == null)
+            {
+                var queue = cached.Queues.FirstOrDefault(q => string.Equals(q.Name, entityPath, StringComparison.OrdinalIgnoreCase));
+                if (queue != null) return queue.RequiresSession;
+            }
+            else
+            {
+                var subscription = cached.Topics
+                    .FirstOrDefault(t => string.Equals(t.Name, entityPath, StringComparison.OrdinalIgnoreCase))?
+                    .Subscriptions.FirstOrDefault(s => string.Equals(s.Name, subscriptionName, StringComparison.OrdinalIgnoreCase));
+                if (subscription != null) return subscription.RequiresSession;
+            }
+        }
+
+        try
+        {
+            var adminClient = GetManagementClient(connection);
+            return subscriptionName == null
+                ? (await adminClient.GetQueueAsync(entityPath)).Value.RequiresSession
+                : (await adminClient.GetSubscriptionAsync(entityPath, subscriptionName)).Value.RequiresSession;
+        }
+        catch (Exception ex)
+        {
+            // Can't tell — assume a plain entity, which is what the receive path did before.
+            _logger.LogWarning(ex, "Could not determine whether {Entity} requires sessions; assuming it does not", entityPath);
+            return false;
+        }
+    }
+
+    private enum SessionAcceptOutcome
+    {
+        Accepted,
+        // No session became available within SessionAcceptTimeout: everything left is either
+        // empty or locked by another consumer.
+        None,
+        // The path refuses session receivers. Real Service Bus makes the dead-letter queue of a
+        // session-enabled entity session-enabled too, but the emulator rejects sessions on
+        // sub-queues, so callers fall back to a plain receiver.
+        NotSupported
+    }
+
+    // Locks the next available session on the given path.
+    private async Task<(ServiceBusSessionReceiver? Receiver, SessionAcceptOutcome Outcome)> TryAcceptNextSessionAsync(ServiceBusClient client, string path, CancellationToken cancellationToken)
+    {
+        // PrefetchCount = 0 for the same reason as the plain receivers: never hold locks on
+        // messages we didn't ask for.
+        var options = new ServiceBusSessionReceiverOptions { PrefetchCount = 0 };
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(SessionAcceptTimeout);
+
+        try
+        {
+            return (await client.AcceptNextSessionAsync(path, options, timeoutSource.Token), SessionAcceptOutcome.Accepted);
+        }
+        catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.ServiceTimeout)
+        {
+            return (null, SessionAcceptOutcome.None);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return (null, SessionAcceptOutcome.None);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex, "{Entity} does not accept session receivers; falling back to a plain receiver", path);
+            return (null, SessionAcceptOutcome.NotSupported);
+        }
+    }
+
+    // Session equivalent of the bulk consume: sessions are locked one at a time, drained, released,
+    // and the next one is taken, until maxMessages are gone or no session is left to lock.
+    // Returns null when the path turns out not to accept session receivers at all, so the caller
+    // can fall back to a plain one.
+    private async Task<int?> ConsumeSessionMessagesAsync(ServiceBusClient client, string path, int maxMessages, DateTime deadline, CancellationToken cancellationToken)
+    {
+        var consumed = 0;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        while (consumed < maxMessages && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            var (receiver, outcome) = await TryAcceptNextSessionAsync(client, path, cancellationToken);
+            if (outcome == SessionAcceptOutcome.NotSupported)
+            {
+                return consumed > 0 ? consumed : null;
+            }
+            if (receiver == null)
+            {
+                break;
+            }
+
+            await using (receiver)
+            {
+                // Sessions are drained before being released, so getting one back means the broker
+                // has cycled through every available session — stop instead of spinning.
+                if (!visited.Add(receiver.SessionId))
+                {
+                    break;
+                }
+
+                var sessionFailed = false;
+                while (consumed < maxMessages && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+                {
+                    IReadOnlyList<ServiceBusReceivedMessage> messages;
+                    try
+                    {
+                        messages = await receiver.ReceiveMessagesAsync(Math.Min(maxMessages - consumed, 256), TimeSpan.FromSeconds(5), cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // Same best-effort contract as the plain path: report what was consumed.
+                        _logger.LogWarning(ex, "Receive failed while consuming session {SessionId} of {Entity}; returning {Consumed} consumed so far", receiver.SessionId, path, consumed);
+                        sessionFailed = true;
+                        break;
+                    }
+
+                    if (messages.Count == 0)
+                    {
+                        break;
+                    }
+
+                    consumed += await CompleteAllAsync(receiver, messages, cancellationToken);
+                }
+
+                if (sessionFailed)
+                {
+                    break;
+                }
+            }
+        }
+
+        return consumed;
+    }
+
+    // Session equivalent of the delete-by-sequence flow. Messages that aren't targets are left
+    // locked rather than abandoned: abandoning inside a session makes the broker redeliver them
+    // immediately, which would loop forever. Closing the session releases them untouched.
+    // Returns null when the path turns out not to accept session receivers at all, so the caller
+    // can fall back to a plain one.
+    private async Task<int?> CompleteSessionMessagesBySequenceAsync(ServiceBusClient client, string path, HashSet<long> sequenceSet, DateTime deadline, CancellationToken cancellationToken)
+    {
+        var completed = 0;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        while (sequenceSet.Count > 0 && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            var (receiver, outcome) = await TryAcceptNextSessionAsync(client, path, cancellationToken);
+            if (outcome == SessionAcceptOutcome.NotSupported)
+            {
+                return completed > 0 ? completed : null;
+            }
+            if (receiver == null)
+            {
+                break;
+            }
+
+            await using (receiver)
+            {
+                if (!visited.Add(receiver.SessionId))
+                {
+                    break;
+                }
+
+                var sessionFailed = false;
+                while (sequenceSet.Count > 0 && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+                {
+                    IReadOnlyList<ServiceBusReceivedMessage> received;
+                    try
+                    {
+                        received = await receiver.ReceiveMessagesAsync(256, TimeSpan.FromSeconds(1), cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex, "Receive failed while deleting by sequence from session {SessionId} of {Entity}; returning {Completed} completed so far", receiver.SessionId, path, completed);
+                        sessionFailed = true;
+                        break;
+                    }
+
+                    if (received.Count == 0)
+                    {
+                        break;
+                    }
+
+                    var toComplete = new List<ServiceBusReceivedMessage>();
+                    foreach (var msg in received)
+                    {
+                        if (sequenceSet.Remove(msg.SequenceNumber))
+                        {
+                            toComplete.Add(msg);
+                        }
+                    }
+
+                    completed += await CompleteAllAsync(receiver, toComplete, cancellationToken);
+                }
+
+                if (sessionFailed)
+                {
+                    break;
+                }
+            }
+        }
+
+        return completed;
+    }
+
+    // Completes a batch in parallel and returns how many actually settled. Anything that fails
+    // (lock lost to another consumer, already settled) is skipped best-effort.
+    private static async Task<int> CompleteAllAsync(ServiceBusReceiver receiver, IReadOnlyList<ServiceBusReceivedMessage> messages, CancellationToken cancellationToken)
+    {
+        if (messages.Count == 0)
+        {
+            return 0;
+        }
+
+        var results = await Task.WhenAll(messages.Select(async msg =>
+        {
+            try
+            {
+                await receiver.CompleteMessageAsync(msg, cancellationToken);
+                return true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return false;
+            }
+        }));
+
+        return results.Count(ok => ok);
+    }
+
     public async Task<bool?> ReturnDeadLetterMessageAsync(int connectionId, string entityPath, string? subscriptionName, long sequenceNumber, SendMessageDto? modifiedMessage, bool deleteOriginal)
     {
         var connection = await _connectionRepository.GetByIdAsync(connectionId);
@@ -791,6 +1056,19 @@ public class ServiceBusService : IServiceBusService
 
             if (deleteOriginal)
             {
+                // The dead-letter queue of a session-enabled entity is session-enabled too on real
+                // Service Bus, so the original can only be settled through a locked session. The
+                // emulator rejects sessions on sub-queues, which falls through to the plain flow.
+                if (await RequiresSessionAsync(connection, entityPath, subscriptionName))
+                {
+                    var timeoutSeconds = await _settingsService.GetBatchOperationTimeoutSecondsAsync();
+                    var sessionCompleted = await CompleteSessionMessagesBySequenceAsync(client, GetReceiverPath(entityPath, subscriptionName, deadLetter: true), new HashSet<long> { sequenceNumber }, DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds), CancellationToken.None);
+                    if (sessionCompleted.HasValue)
+                    {
+                        return true;
+                    }
+                }
+
                 // Use larger batch sizes for faster iteration through DLQ
                 // Max batch size is 256 for Service Bus
                 const int batchSize = 256;
@@ -883,6 +1161,18 @@ public class ServiceBusService : IServiceBusService
             var completed = 0;
             var timeoutSeconds = await _settingsService.GetBatchOperationTimeoutSecondsAsync();
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
+
+            // The dead-letter queue of a session-enabled entity is session-enabled too on real
+            // Service Bus, so the originals can only be settled through locked sessions. The
+            // emulator rejects sessions on sub-queues, which falls through to the plain flow.
+            if (await RequiresSessionAsync(connection, entityPath, subscriptionName))
+            {
+                var sessionCompleted = await CompleteSessionMessagesBySequenceAsync(client, GetReceiverPath(entityPath, subscriptionName, deadLetter: true), sequenceSet, deadline, CancellationToken.None);
+                if (sessionCompleted.HasValue)
+                {
+                    return sessionCompleted;
+                }
+            }
 
             while (sequenceSet.Count > 0 && DateTime.UtcNow < deadline)
             {
