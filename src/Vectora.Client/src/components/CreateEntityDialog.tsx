@@ -7,7 +7,16 @@ import type {
   CreateTopicRequest,
   CreateSubscriptionRequest,
 } from "../types";
-import { ForwardToSelector, formatDuration } from "./entityFormFields";
+import {
+  AUTO_DELETE_FIELD,
+  DUPLICATE_DETECTION_FIELD,
+  DurationInput,
+  ForwardToSelector,
+  LOCK_DURATION_FIELD,
+  TTL_FIELD,
+  formatDuration,
+  validateDuration,
+} from "./entityFormFields";
 
 export type CreateEntityPayload =
   | { type: "queue"; data: CreateQueueRequest }
@@ -86,10 +95,20 @@ export default function CreateEntityDialog({
   const [forwardTo, setForwardTo] = useState("");
   const [forwardDlq, setForwardDlq] = useState("");
 
+  const durationError =
+    validateDuration(ttl, TTL_FIELD) ||
+    validateDuration(autoDeleteOnIdle, AUTO_DELETE_FIELD) ||
+    (entityType !== "topic"
+      ? validateDuration(lockDuration, LOCK_DURATION_FIELD)
+      : null) ||
+    (entityType !== "subscription" && requiresDuplicateDetection
+      ? validateDuration(duplicateDetectionWindow, DUPLICATE_DETECTION_FIELD)
+      : null);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed || creating) return;
+    if (!trimmed || creating || durationError) return;
 
     if (entityType === "queue") {
       onCreate({
@@ -226,45 +245,30 @@ export default function CreateEntityDialog({
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-dark-400 mb-1">
-                Message TTL
-              </label>
-              <input
-                type="text"
-                value={ttl}
-                onChange={(e) => setTtl(e.target.value)}
-                className={inputClass}
-                placeholder="e.g. 14d or 1h 30m"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-dark-400 mb-1">
-                Auto-delete on Idle
-              </label>
-              <input
-                type="text"
-                value={autoDeleteOnIdle}
-                onChange={(e) => setAutoDeleteOnIdle(e.target.value)}
-                className={inputClass}
-                placeholder="e.g. Never or 7d"
-              />
-            </div>
+            <DurationInput
+              label="Message TTL"
+              value={ttl}
+              onChange={setTtl}
+              inputClassName={inputClass}
+              {...TTL_FIELD}
+            />
+            <DurationInput
+              label="Auto-delete on Idle"
+              value={autoDeleteOnIdle}
+              onChange={setAutoDeleteOnIdle}
+              inputClassName={inputClass}
+              {...AUTO_DELETE_FIELD}
+            />
           </div>
           {entityType !== "topic" && (
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-dark-400 mb-1">
-                  Lock Duration
-                </label>
-                <input
-                  type="text"
-                  value={lockDuration}
-                  onChange={(e) => setLockDuration(e.target.value)}
-                  className={inputClass}
-                  placeholder="e.g. 30s or 5m"
-                />
-              </div>
+              <DurationInput
+                label="Lock Duration"
+                value={lockDuration}
+                onChange={setLockDuration}
+                inputClassName={inputClass}
+                {...LOCK_DURATION_FIELD}
+              />
               <div>
                 <label className="block text-sm text-dark-400 mb-1">
                   Max Delivery Count
@@ -316,15 +320,12 @@ export default function CreateEntityDialog({
             )}
             {entityType !== "subscription" && requiresDuplicateDetection && (
               <div className="pl-6">
-                <label className="block text-sm text-dark-400 mb-1">
-                  Duplicate Detection Window
-                </label>
-                <input
-                  type="text"
+                <DurationInput
+                  label="Duplicate Detection Window"
                   value={duplicateDetectionWindow}
-                  onChange={(e) => setDuplicateDetectionWindow(e.target.value)}
-                  className={inputClass}
-                  placeholder="e.g. 10m"
+                  onChange={setDuplicateDetectionWindow}
+                  inputClassName={inputClass}
+                  {...DUPLICATE_DETECTION_FIELD}
                 />
               </div>
             )}
@@ -390,7 +391,7 @@ export default function CreateEntityDialog({
             </button>
             <button
               type="submit"
-              disabled={creating || !name.trim()}
+              disabled={creating || !name.trim() || !!durationError}
               className="px-3 py-1.5 bg-primary-500 hover:bg-primary-400 text-white text-sm rounded-lg disabled:opacity-50 flex items-center gap-2"
             >
               {creating && <Loader2 className="w-4 h-4 animate-spin" />}
