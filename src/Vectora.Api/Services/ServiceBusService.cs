@@ -408,21 +408,24 @@ public class ServiceBusService : IServiceBusService
     //     cancellation token (RequestAborted) is only checked *between* batches, so a client
     //     disconnect stops further deletion without half-finishing a batch or overshooting.
     //   * Messages whose lock is lost mid-complete are not counted and are retried on a later pass.
-    public async Task<int?> ReceiveMessagesAsync(int connectionId, string entityPath, string? subscriptionName, int maxMessages, bool deadLetter, CancellationToken cancellationToken = default)
+    // When sessionId is given, only that session is consumed (the user drilled into it in the
+    // session browser); otherwise a session-enabled entity is walked session by session.
+    public async Task<int?> ReceiveMessagesAsync(int connectionId, string entityPath, string? subscriptionName, int maxMessages, bool deadLetter, string? sessionId = null, CancellationToken cancellationToken = default)
     {
         var connection = await _connectionRepository.GetByIdAsync(connectionId);
         if (connection == null) return null;
 
         var subQueue = deadLetter ? SubQueue.DeadLetter : SubQueue.None;
         var client = _clientCache.GetClient(connectionId, connection.ConnectionString);
+        var timeoutSeconds = await _settingsService.GetBatchOperationTimeoutSecondsAsync();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
 
         // A session-enabled entity rejects plain receivers, so the whole consume has to go through
         // locked sessions instead (see ConsumeSessionMessagesAsync). A null result means the path
         // doesn't take session receivers after all (emulator dead-letter sub-queues) — use a plain one.
-        if (await RequiresSessionAsync(connection, entityPath, subscriptionName))
+        if (sessionId != null || await RequiresSessionAsync(connection, entityPath, subscriptionName))
         {
-            var sessionTimeoutSeconds = await _settingsService.GetBatchOperationTimeoutSecondsAsync();
-            var sessionConsumed = await ConsumeSessionMessagesAsync(client, GetReceiverPath(entityPath, subscriptionName, deadLetter), maxMessages, DateTime.UtcNow + TimeSpan.FromSeconds(sessionTimeoutSeconds), cancellationToken);
+            var sessionConsumed = await ConsumeSessionMessagesAsync(client, GetReceiverPath(entityPath, subscriptionName, deadLetter), sessionId, maxMessages, deadline, cancellationToken);
             if (sessionConsumed.HasValue)
             {
                 return sessionConsumed;
@@ -438,10 +441,13 @@ public class ServiceBusService : IServiceBusService
 
         await using (receiver)
         {
+            if (sessionId != null)
+            {
+                return await ConsumeMessagesOfSessionAsync(receiver, entityPath, sessionId, maxMessages, deadline, cancellationToken);
+            }
+
             var consumed = 0;
             var remaining = maxMessages;
-            var timeoutSeconds = await _settingsService.GetBatchOperationTimeoutSecondsAsync();
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
 
             while (remaining > 0 && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
             {
@@ -782,6 +788,10 @@ public class ServiceBusService : IServiceBusService
     // more. AcceptNextSessionAsync otherwise blocks for the client's TryTimeout (60s by default).
     private static readonly TimeSpan SessionAcceptTimeout = TimeSpan.FromSeconds(5);
 
+    // PrefetchCount = 0 for the same reason as the plain receivers: never hold locks on messages
+    // we didn't ask for.
+    private static readonly ServiceBusSessionReceiverOptions SessionReceiverOptions = new() { PrefetchCount = 0 };
+
     // True when messages of this entity can only be received through a locked session. The entity
     // cache already carries the flag for every enumerated entity; the admin lookup is the fallback
     // for a cold cache.
@@ -830,18 +840,17 @@ public class ServiceBusService : IServiceBusService
         NotSupported
     }
 
-    // Locks the next available session on the given path.
+    // Locks the next available session on the given path. AcceptNextSessionAsync waits for the
+    // client's TryTimeout (60s by default) when nothing is available, so it is capped to keep a
+    // consume from hanging on a drained entity.
     private async Task<(ServiceBusSessionReceiver? Receiver, SessionAcceptOutcome Outcome)> TryAcceptNextSessionAsync(ServiceBusClient client, string path, CancellationToken cancellationToken)
     {
-        // PrefetchCount = 0 for the same reason as the plain receivers: never hold locks on
-        // messages we didn't ask for.
-        var options = new ServiceBusSessionReceiverOptions { PrefetchCount = 0 };
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(SessionAcceptTimeout);
 
         try
         {
-            return (await client.AcceptNextSessionAsync(path, options, timeoutSource.Token), SessionAcceptOutcome.Accepted);
+            return (await client.AcceptNextSessionAsync(path, SessionReceiverOptions, timeoutSource.Token), SessionAcceptOutcome.Accepted);
         }
         catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.ServiceTimeout)
         {
@@ -858,12 +867,75 @@ public class ServiceBusService : IServiceBusService
         }
     }
 
-    // Session equivalent of the bulk consume: sessions are locked one at a time, drained, released,
-    // and the next one is taken, until maxMessages are gone or no session is left to lock.
+    // Locks one specific session, which the user picked in the session browser. There is no
+    // waiting involved here, so no extra timeout is imposed; a session held by another consumer
+    // fails with ServiceBusFailureReason.SessionCannotBeLocked and is reported rather than being
+    // silently counted as "consumed 0".
+    private async Task<(ServiceBusSessionReceiver? Receiver, SessionAcceptOutcome Outcome)> TryAcceptSessionAsync(ServiceBusClient client, string path, string sessionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await client.AcceptSessionAsync(path, sessionId, SessionReceiverOptions, cancellationToken), SessionAcceptOutcome.Accepted);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex, "{Entity} does not accept session receivers; falling back to a plain receiver", path);
+            return (null, SessionAcceptOutcome.NotSupported);
+        }
+    }
+
+    // Receives and completes up to maxMessages from an already-locked session. Returns how many
+    // were settled and whether the session failed mid-way (in which case the caller stops instead
+    // of moving on, matching the plain path's best-effort contract).
+    private async Task<(int Consumed, bool Failed)> DrainSessionAsync(ServiceBusSessionReceiver receiver, string path, int maxMessages, DateTime deadline, CancellationToken cancellationToken)
+    {
+        var consumed = 0;
+
+        while (consumed < maxMessages && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            IReadOnlyList<ServiceBusReceivedMessage> messages;
+            try
+            {
+                messages = await receiver.ReceiveMessagesAsync(Math.Min(maxMessages - consumed, 256), TimeSpan.FromSeconds(5), cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Receive failed while consuming session {SessionId} of {Entity}; returning {Consumed} consumed so far", receiver.SessionId, path, consumed);
+                return (consumed, true);
+            }
+
+            if (messages.Count == 0)
+            {
+                break;
+            }
+
+            consumed += await CompleteAllAsync(receiver, messages, cancellationToken);
+        }
+
+        return (consumed, false);
+    }
+
+    // Session equivalent of the bulk consume. With no sessionId, sessions are locked one at a time,
+    // drained, released, and the next one is taken, until maxMessages are gone or no session is
+    // left to lock; with one, only that session is drained.
     // Returns null when the path turns out not to accept session receivers at all, so the caller
     // can fall back to a plain one.
-    private async Task<int?> ConsumeSessionMessagesAsync(ServiceBusClient client, string path, int maxMessages, DateTime deadline, CancellationToken cancellationToken)
+    private async Task<int?> ConsumeSessionMessagesAsync(ServiceBusClient client, string path, string? sessionId, int maxMessages, DateTime deadline, CancellationToken cancellationToken)
     {
+        if (sessionId != null)
+        {
+            var (sessionReceiver, sessionOutcome) = await TryAcceptSessionAsync(client, path, sessionId, cancellationToken);
+            if (sessionOutcome == SessionAcceptOutcome.NotSupported || sessionReceiver == null)
+            {
+                return null;
+            }
+
+            await using (sessionReceiver)
+            {
+                return (await DrainSessionAsync(sessionReceiver, path, maxMessages, deadline, cancellationToken)).Consumed;
+            }
+        }
+
         var consumed = 0;
         var visited = new HashSet<string>(StringComparer.Ordinal);
 
@@ -888,29 +960,8 @@ public class ServiceBusService : IServiceBusService
                     break;
                 }
 
-                var sessionFailed = false;
-                while (consumed < maxMessages && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
-                {
-                    IReadOnlyList<ServiceBusReceivedMessage> messages;
-                    try
-                    {
-                        messages = await receiver.ReceiveMessagesAsync(Math.Min(maxMessages - consumed, 256), TimeSpan.FromSeconds(5), cancellationToken);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        // Same best-effort contract as the plain path: report what was consumed.
-                        _logger.LogWarning(ex, "Receive failed while consuming session {SessionId} of {Entity}; returning {Consumed} consumed so far", receiver.SessionId, path, consumed);
-                        sessionFailed = true;
-                        break;
-                    }
-
-                    if (messages.Count == 0)
-                    {
-                        break;
-                    }
-
-                    consumed += await CompleteAllAsync(receiver, messages, cancellationToken);
-                }
+                var (sessionConsumed, sessionFailed) = await DrainSessionAsync(receiver, path, maxMessages - consumed, deadline, cancellationToken);
+                consumed += sessionConsumed;
 
                 if (sessionFailed)
                 {
@@ -991,6 +1042,73 @@ public class ServiceBusService : IServiceBusService
         }
 
         return completed;
+    }
+
+    // Plain-receiver fallback for a single session on a path that refuses session receivers
+    // (the emulator's dead-letter sub-queues): receive, complete only the requested session's
+    // messages and abandon the rest. Abandoned messages come back immediately, so the loop stops
+    // as soon as a batch brings nothing it hasn't already seen.
+    private async Task<int> ConsumeMessagesOfSessionAsync(ServiceBusReceiver receiver, string path, string sessionId, int maxMessages, DateTime deadline, CancellationToken cancellationToken)
+    {
+        var consumed = 0;
+        var seen = new HashSet<long>();
+
+        while (consumed < maxMessages && DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            IReadOnlyList<ServiceBusReceivedMessage> messages;
+            try
+            {
+                messages = await receiver.ReceiveMessagesAsync(256, TimeSpan.FromSeconds(5), cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Receive failed while consuming session {SessionId} of {Entity}; returning {Consumed} consumed so far", sessionId, path, consumed);
+                break;
+            }
+
+            if (messages.Count == 0)
+            {
+                break;
+            }
+
+            var toComplete = new List<ServiceBusReceivedMessage>();
+            var toAbandon = new List<ServiceBusReceivedMessage>();
+            var sawNew = false;
+
+            foreach (var msg in messages)
+            {
+                sawNew |= seen.Add(msg.SequenceNumber);
+                if (consumed + toComplete.Count < maxMessages && string.Equals(msg.SessionId ?? string.Empty, sessionId, StringComparison.Ordinal))
+                {
+                    toComplete.Add(msg);
+                }
+                else
+                {
+                    toAbandon.Add(msg);
+                }
+            }
+
+            consumed += await CompleteAllAsync(receiver, toComplete, cancellationToken);
+
+            await Task.WhenAll(toAbandon.Select(async m =>
+            {
+                try
+                {
+                    await receiver.AbandonMessageAsync(m, cancellationToken: cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Abandoning a lock we no longer hold is harmless; ignore.
+                }
+            }));
+
+            if (!sawNew)
+            {
+                break;
+            }
+        }
+
+        return consumed;
     }
 
     // Completes a batch in parallel and returns how many actually settled. Anything that fails
