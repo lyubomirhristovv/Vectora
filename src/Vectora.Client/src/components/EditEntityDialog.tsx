@@ -21,9 +21,13 @@ import {
   updateSubscription,
 } from "../api/client";
 import {
+  DurationInput,
   ForwardToSelector,
+  LOCK_DURATION_FIELD,
+  TTL_FIELD,
   formatDuration,
   parseDuration,
+  validateDuration,
 } from "./entityFormFields";
 
 const STATUS_OPTIONS: EntityStatus[] = [
@@ -82,8 +86,13 @@ function QueueForm({
     properties.forwardDeadLetteredMessagesTo || "",
   );
 
+  const durationError =
+    validateDuration(ttl, TTL_FIELD) ||
+    validateDuration(lockDuration, LOCK_DURATION_FIELD);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (durationError) return;
     onSave({
       status,
       defaultMessageTimeToLive: formatDuration(ttl),
@@ -112,30 +121,18 @@ function QueueForm({
         </select>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-sm text-dark-400 mb-1">
-            Message TTL
-          </label>
-          <input
-            type="text"
-            value={ttl}
-            onChange={(e) => setTtl(e.target.value)}
-            className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-white text-sm"
-            placeholder="e.g. 14d or 1h 30m"
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-dark-400 mb-1">
-            Lock Duration
-          </label>
-          <input
-            type="text"
-            value={lockDuration}
-            onChange={(e) => setLockDuration(e.target.value)}
-            className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-white text-sm"
-            placeholder="e.g. 30s or 5m"
-          />
-        </div>
+        <DurationInput
+          label="Message TTL"
+          value={ttl}
+          onChange={setTtl}
+          {...TTL_FIELD}
+        />
+        <DurationInput
+          label="Lock Duration"
+          value={lockDuration}
+          onChange={setLockDuration}
+          {...LOCK_DURATION_FIELD}
+        />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -181,7 +178,7 @@ function QueueForm({
       <div className="flex justify-end pt-8 mt-4">
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || !!durationError}
           className="px-4 py-2 bg-primary-500 hover:bg-primary-400 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
         >
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -204,8 +201,11 @@ function TopicForm({ properties, onSave, saving }: TopicFormProps) {
     parseDuration(properties.defaultMessageTimeToLive),
   );
 
+  const durationError = validateDuration(ttl, TTL_FIELD);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (durationError) return;
     onSave({
       status,
       defaultMessageTimeToLive: formatDuration(ttl),
@@ -228,18 +228,12 @@ function TopicForm({ properties, onSave, saving }: TopicFormProps) {
           ))}
         </select>
       </div>
-      <div>
-        <label className="block text-sm text-dark-400 mb-1">
-          Default Message TTL
-        </label>
-        <input
-          type="text"
-          value={ttl}
-          onChange={(e) => setTtl(e.target.value)}
-          className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-white text-sm"
-          placeholder="e.g. 14d or 1h 30m"
-        />
-      </div>
+      <DurationInput
+        label="Default Message TTL"
+        value={ttl}
+        onChange={setTtl}
+        {...TTL_FIELD}
+      />
       <p className="text-xs text-dark-500">
         Topics have fewer editable properties. Other settings are fixed at
         creation time.
@@ -247,7 +241,7 @@ function TopicForm({ properties, onSave, saving }: TopicFormProps) {
       <div className="flex justify-end pt-8 mt-4">
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || !!durationError}
           className="px-4 py-2 bg-primary-500 hover:bg-primary-400 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
         >
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -291,8 +285,13 @@ function SubscriptionForm({
     properties.forwardDeadLetteredMessagesTo || "",
   );
 
+  const durationError =
+    validateDuration(ttl, TTL_FIELD) ||
+    validateDuration(lockDuration, LOCK_DURATION_FIELD);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (durationError) return;
     onSave({
       status,
       defaultMessageTimeToLive: formatDuration(ttl),
@@ -321,30 +320,18 @@ function SubscriptionForm({
         </select>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-sm text-dark-400 mb-1">
-            Message TTL
-          </label>
-          <input
-            type="text"
-            value={ttl}
-            onChange={(e) => setTtl(e.target.value)}
-            className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-white text-sm"
-            placeholder="e.g. 14d or 1h 30m"
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-dark-400 mb-1">
-            Lock Duration
-          </label>
-          <input
-            type="text"
-            value={lockDuration}
-            onChange={(e) => setLockDuration(e.target.value)}
-            className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-white text-sm"
-            placeholder="e.g. 30s or 5m"
-          />
-        </div>
+        <DurationInput
+          label="Message TTL"
+          value={ttl}
+          onChange={setTtl}
+          {...TTL_FIELD}
+        />
+        <DurationInput
+          label="Lock Duration"
+          value={lockDuration}
+          onChange={setLockDuration}
+          {...LOCK_DURATION_FIELD}
+        />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -390,7 +377,7 @@ function SubscriptionForm({
       <div className="flex justify-end pt-8 mt-4">
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || !!durationError}
           className="px-4 py-2 bg-primary-500 hover:bg-primary-400 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
         >
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
