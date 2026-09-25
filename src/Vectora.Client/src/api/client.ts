@@ -146,10 +146,11 @@ export const peekQueueSessionMessages = (connectionId: number, queueName: string
 export const peekSubscriptionSessionMessages = (connectionId: number, topicName: string, subscriptionName: string, sessionId: string, deadLetter = false, fromSequenceNumber?: number, scanLimit = 1000) =>
   fetchApi<SessionMessageScanResult>(`/connections/${connectionId}/servicebus/topics/${encodeURIComponent(topicName)}/subscriptions/${encodeURIComponent(subscriptionName)}/sessions/messages?sessionId=${encodeURIComponent(sessionId)}&deadLetter=${deadLetter}&scanLimit=${scanLimit}${fromSequenceNumber != null ? `&fromSequenceNumber=${fromSequenceNumber}` : ''}`);
 
-export const receiveQueueMessages = (connectionId: number, queueName: string, maxMessages = 10, deadLetter = false) =>
-  fetchApi<{ consumedCount: number }>(`/connections/${connectionId}/servicebus/queues/${encodeURIComponent(queueName)}/messages/receive?maxMessages=${maxMessages}&deadLetter=${deadLetter}`, { method: 'POST' });
-export const receiveSubscriptionMessages = (connectionId: number, topicName: string, subscriptionName: string, maxMessages = 10, deadLetter = false) =>
-  fetchApi<{ consumedCount: number }>(`/connections/${connectionId}/servicebus/topics/${encodeURIComponent(topicName)}/subscriptions/${encodeURIComponent(subscriptionName)}/messages/receive?maxMessages=${maxMessages}&deadLetter=${deadLetter}`, { method: 'POST' });
+// sessionId scopes the consume to a single session of a session-enabled entity.
+export const receiveQueueMessages = (connectionId: number, queueName: string, maxMessages = 10, deadLetter = false, sessionId?: string) =>
+  fetchApi<{ consumedCount: number }>(`/connections/${connectionId}/servicebus/queues/${encodeURIComponent(queueName)}/messages/receive?maxMessages=${maxMessages}&deadLetter=${deadLetter}${sessionId != null ? `&sessionId=${encodeURIComponent(sessionId)}` : ''}`, { method: 'POST' });
+export const receiveSubscriptionMessages = (connectionId: number, topicName: string, subscriptionName: string, maxMessages = 10, deadLetter = false, sessionId?: string) =>
+  fetchApi<{ consumedCount: number }>(`/connections/${connectionId}/servicebus/topics/${encodeURIComponent(topicName)}/subscriptions/${encodeURIComponent(subscriptionName)}/messages/receive?maxMessages=${maxMessages}&deadLetter=${deadLetter}${sessionId != null ? `&sessionId=${encodeURIComponent(sessionId)}` : ''}`, { method: 'POST' });
 
 export const sendToQueue = (connectionId: number, queueName: string, message: SendMessageRequest, count = 1) =>
   fetchApi<{ sentCount: number }>(`/connections/${connectionId}/servicebus/queues/${encodeURIComponent(queueName)}/messages?count=${count}`, { method: 'POST', body: JSON.stringify(message) });

@@ -186,7 +186,7 @@ public static class ServiceBusMessageEndpoints
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> ReceiveQueueMessages(int connectionId, string queueName, IServiceBusService serviceBusService, CancellationToken cancellationToken, [FromQuery] int maxMessages = 10, [FromQuery] bool deadLetter = false)
+    private static async Task<IResult> ReceiveQueueMessages(int connectionId, string queueName, IServiceBusService serviceBusService, CancellationToken cancellationToken, [FromQuery] int maxMessages = 10, [FromQuery] bool deadLetter = false, [FromQuery] string? sessionId = null)
     {
         // Validate input - allow up to 100,000 for consume/purge operations
         var (valid, error) = ValidationHelper.ValidateMaxMessages(maxMessages, 100000);
@@ -195,7 +195,7 @@ public static class ServiceBusMessageEndpoints
             return Results.BadRequest(new { error });
         }
 
-        var consumedCount = await serviceBusService.ReceiveMessagesAsync(connectionId, queueName, null, maxMessages, deadLetter, cancellationToken);
+        var consumedCount = await serviceBusService.ReceiveMessagesAsync(connectionId, queueName, null, maxMessages, deadLetter, sessionId, cancellationToken);
         if (consumedCount == null)
         {
             return Results.NotFound("Connection not found");
@@ -203,7 +203,7 @@ public static class ServiceBusMessageEndpoints
         return Results.Ok(new { consumedCount });
     }
 
-    private static async Task<IResult> ReceiveSubscriptionMessages(int connectionId, string topicName, string subscriptionName, IServiceBusService serviceBusService, CancellationToken cancellationToken, [FromQuery] int maxMessages = 10, [FromQuery] bool deadLetter = false)
+    private static async Task<IResult> ReceiveSubscriptionMessages(int connectionId, string topicName, string subscriptionName, IServiceBusService serviceBusService, CancellationToken cancellationToken, [FromQuery] int maxMessages = 10, [FromQuery] bool deadLetter = false, [FromQuery] string? sessionId = null)
     {
         // Validate input - allow up to 100,000 for consume/purge operations
         var (valid, error) = ValidationHelper.ValidateMaxMessages(maxMessages, 100000);
@@ -212,7 +212,7 @@ public static class ServiceBusMessageEndpoints
             return Results.BadRequest(new { error });
         }
 
-        var consumedCount = await serviceBusService.ReceiveMessagesAsync(connectionId, topicName, subscriptionName, maxMessages, deadLetter, cancellationToken);
+        var consumedCount = await serviceBusService.ReceiveMessagesAsync(connectionId, topicName, subscriptionName, maxMessages, deadLetter, sessionId, cancellationToken);
         if (consumedCount == null)
         {
             return Results.NotFound("Connection not found");

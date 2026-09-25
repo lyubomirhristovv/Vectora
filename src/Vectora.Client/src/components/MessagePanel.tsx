@@ -592,18 +592,7 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
   };
 
   const handleRefresh = () => {
-    if (sessionView) {
-      if (selectedSession) {
-        loadSessionMessages(selectedSession, true);
-      } else {
-        scanSessions(true);
-      }
-      // Session view bypasses loadMessages/refreshAfterAction, so refresh the
-      // left-panel Active/DLQ counters here too.
-      if (selectedEntity) onUpdateEntityCount?.(selectedEntity);
-    } else {
-      refreshAfterAction();
-    }
+    refreshAfterAction();
   };
 
   const handleScroll = useCallback(() => {
@@ -723,7 +712,16 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
   }, [visibleMessages, selectedMessage, selectMode, hasHiddenRows, listMessages.length]);
 
   const refreshAfterAction = async () => {
-    await loadMessages();
+    // Session view has its own peek-based loaders; loadMessages() would fetch the flat list.
+    if (sessionView) {
+      if (selectedSession) {
+        await loadSessionMessages(selectedSession, true);
+      } else {
+        await scanSessions(true);
+      }
+    } else {
+      await loadMessages();
+    }
     if (selectedEntity) {
       onUpdateEntityCount?.(selectedEntity);
     }
@@ -759,6 +757,8 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
     if (consumeSubmitInFlightRef.current) return;
     const count = clearAll ? 10000 : parseInt(consumeCount) || 0;
     if (count <= 0) return;
+    // Drilled into a session: consume only that session, leaving the other sessions untouched.
+    const sessionId = inSessionMessages ? selectedSession ?? undefined : undefined;
     consumeSubmitInFlightRef.current = true;
     setLoading(true);
     setActionStatus(null);
@@ -766,19 +766,20 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
     try {
       let result: { consumedCount: number } | undefined;
       if (selectedEntity.type === 'queue') {
-        result = await receiveQueueMessages(connection.id, selectedEntity.name, count, showDeadLetter);
+        result = await receiveQueueMessages(connection.id, selectedEntity.name, count, showDeadLetter, sessionId);
       } else if (selectedEntity.type === 'subscription' && selectedEntity.topicName) {
-        result = await receiveSubscriptionMessages(connection.id, selectedEntity.topicName, selectedEntity.name, count, showDeadLetter);
+        result = await receiveSubscriptionMessages(connection.id, selectedEntity.topicName, selectedEntity.name, count, showDeadLetter, sessionId);
       }
       await refreshAfterAction();
       const consumed = result?.consumedCount ?? 0;
+      const scope = sessionId !== undefined ? ` from session "${sessionId}"` : '';
       // Report the exact number removed so a partial consume (fewer available, or a cancelled
       // long run) is visible rather than silent.
       setActionStatus({
         kind: 'success',
         text: clearAll
-          ? `Consumed ${consumed} message${consumed === 1 ? '' : 's'}.`
-          : `Consumed ${consumed} of ${count} requested message${count === 1 ? '' : 's'}.`,
+          ? `Consumed ${consumed} message${consumed === 1 ? '' : 's'}${scope}.`
+          : `Consumed ${consumed} of ${count} requested message${count === 1 ? '' : 's'}${scope}.`,
       });
     } catch (error) {
       console.error('Failed to receive messages:', error);
@@ -1078,14 +1079,15 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
               <span className="hidden sm:inline">Send</span>
             </button>
           )}
-          {/* Mutating actions are hidden in session view, which is browse-only */}
+          {/* Mutating actions are hidden in the session list, which is browse-only; consuming a
+              single session is offered once the user has drilled into one. */}
           {!sessionView && showDeadLetter && selectedMessages.size > 0 && (
             <button onClick={handleReturnSelectedToQueue} disabled={loading} className="flex items-center gap-1.5 px-2 md:px-3 py-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-400 text-sm rounded-lg disabled:opacity-50 whitespace-nowrap flex-shrink-0">
               <RotateCcw className="w-4 h-4" />
               <span className="hidden sm:inline">Return</span> ({selectedMessages.size})
             </button>
           )}
-          {!sessionView && (selectedMessages.size > 0 ? (
+          {(!sessionView || inSessionMessages) && (!sessionView && selectedMessages.size > 0 ? (
             // Selected messages: DLQ "Consumes" them; the active queue "Deletes" them
             // (cancelling scheduled ones, receiving + completing the rest).
             <button
@@ -1447,7 +1449,12 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onMouseDown={e => e.target === e.currentTarget && e.button === 0 && closeConsumePopup()}>
           <div className="bg-dark-800 border border-dark-600 rounded-xl w-full max-w-sm p-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">Consume Messages</h3>
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold text-white">Consume Messages</h3>
+                {inSessionMessages && (
+                  <p className="text-xs text-dark-400 truncate">Session: {selectedSession || '(no session id)'}</p>
+                )}
+              </div>
               <button onClick={closeConsumePopup} className="text-dark-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
@@ -1472,7 +1479,7 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
                   onChange={e => setClearAll(e.target.checked)}
                   className="rounded border-dark-500"
                 />
-                Clear all messages
+                Clear all messages{inSessionMessages ? ' in this session' : ''}
               </label>
             </div>
             <div className="flex gap-2 justify-end mt-4">
