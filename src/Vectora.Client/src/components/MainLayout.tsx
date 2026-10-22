@@ -13,6 +13,7 @@ import TourGuide, {
   TOUR_DUMMY_CONNECTIONS,
   TOUR_DUMMY_QUEUES,
   TOUR_DUMMY_TOPICS,
+  TOUR_DUMMY_FAVORITES,
   TOUR_DUMMY_SELECTED_ENTITY,
   TOUR_DUMMY_MESSAGES,
   TOUR_ENTITY_BROWSER_FIRST_STEP,
@@ -674,6 +675,7 @@ export default function MainLayout({ onLogout, showLogout = true }: MainLayoutPr
             onRefresh={tourNeedsEntityBrowser ? () => {} : refreshEntities}
             loading={tourNeedsEntityBrowser ? false : loading}
             tourSwipeActive={tourIsEntitySwipe}
+            tourFavorites={tourNeedsEntityBrowser ? TOUR_DUMMY_FAVORITES : undefined}
           />
         </div>
 

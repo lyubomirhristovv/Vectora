@@ -65,6 +65,7 @@ Entities (each with a unique index on name/key):
 - `ServiceBusConnection` — saved Service Bus connections; `IsEmulator` selects the emulator admin-port rewrite. It is not user-set: `ConnectionRepository` derives it via `EmulatorAdmin.IsEmulatorConnectionString` (looks for `UseDevelopmentEmulator=true`) whenever a connection string is saved, and leaves it alone otherwise.
 - `Setting` — key/value app settings (e.g. `BatchOperationTimeoutSeconds`, clamped 10–600).
 - `MessageTemplate` — saved message bodies for resend.
+- `FavoriteEntity` — starred queues/topics/subscriptions, per connection (FK to `ServiceBusConnection`, cascade delete). Unique on `(ConnectionId, EntityType, TopicName, EntityName)`; `TopicName` is `""` for non-subscriptions. The client drops favorites when it deletes an entity; favorites for entities removed outside Vectora stay in the table but are hidden because the panel resolves them against the live entity list.
 
 ### Service Bus client caching
 
@@ -103,6 +104,7 @@ Minimal APIs grouped in `Endpoints/`:
 - `ServiceBusEndpoints` — `/api/connections/{connectionId:int}/servicebus/...` for entity (queue/topic/subscription) management
 - `ServiceBusMessageEndpoints` — same prefix, for peek/receive/send and DLQ return/consume (both single and batch by sequence number)
 - `MessageTemplateEndpoints` — `/api/message-templates`
+- `FavoriteEntityEndpoints` — `/api/connections/{connectionId:int}/favorites` (GET list, PUT add (idempotent), DELETE `?entityType=&name=&topicName=` (idempotent))
 - `SettingsEndpoints` — `/api/settings`
 
 DTOs live in `Models/Dtos/`. `ValidationHelper` enforces entity-name and message-body/`maxMessages` rules at the endpoint boundary.
@@ -127,6 +129,7 @@ Single-page app under `src/Vectora.Client/src/`:
 - `App.tsx` — boots auth state, mounts `LoginPage` or `MainLayout`.
 - `components/MainLayout.tsx` — top-level shell; persists the last selected connection in `localStorage` under `vectora_last_connection`.
 - `components/EntityBrowser.tsx`, `MessagePanel.tsx`, `MessageViewer.tsx`, `SendMessageDialog.tsx`, `ConnectionManager.tsx`, `EditEntityDialog.tsx`, `SettingsDialog.tsx` — feature panels.
+- `EntityBrowser` has three collapsible sections (Favorites, Queues, Topics). Their collapsed state is stored in `localStorage` under `vectora_collapsed_entity_sections`. Favorites are toggled optimistically via the star on each row; while the tour runs, `MainLayout` passes `tourFavorites` demo data, so nothing is loaded or saved.
 - `types/index.ts` — shared TS types mirroring the API DTOs (camelCase).
 
 Tailwind is configured via `tailwind.config.js` + `postcss.config.js`; Monaco is loaded via `@monaco-editor/react`.

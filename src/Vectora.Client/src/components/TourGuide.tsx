@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X, BookOpen } from 'lucide-react';
-import type { Connection, QueueInfo, TopicInfo, SelectedEntity, ServiceBusMessage } from '../types';
+import type { Connection, QueueInfo, TopicInfo, SelectedEntity, ServiceBusMessage, FavoriteEntity } from '../types';
 
 export interface TourStep {
   id: string;
@@ -389,6 +389,11 @@ export const TOUR_DUMMY_TOPICS: TopicInfo[] = [
   },
 ];
 
+export const TOUR_DUMMY_FAVORITES: FavoriteEntity[] = [
+  { entityType: 'queue', name: 'orders-queue' },
+  { entityType: 'subscription', name: 'audit-log', topicName: 'domain-events' },
+];
+
 export const TOUR_DUMMY_SELECTED_ENTITY: SelectedEntity = { type: 'queue', name: 'orders-queue' };
 
 const _now = new Date();
@@ -466,7 +471,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: 'entity-browser',
     title: 'Entity Browser',
     description:
-      'This panel lists all queues and topics for the selected connection. Click any entity to open it in the message panel on the right.',
+      'This panel lists your favorites, queues and topics for the selected connection. Click any entity to open it in the message panel on the right.',
     placement: 'right',
   },
   {
@@ -475,6 +480,13 @@ export const TOUR_STEPS: TourStep[] = [
     description:
       'Type here to instantly filter queues and topics by name. The list updates as you type.',
     placement: 'bottom',
+  },
+  {
+    id: 'entity-favorites',
+    title: 'Favorites',
+    description:
+      'Click the star on any queue, topic or subscription to pin it here. Click it again (in either panel) to unpin. Click a section header to collapse or expand it; Vectora remembers your choice.',
+    placement: 'right',
   },
   {
     id: 'entity-swipe',

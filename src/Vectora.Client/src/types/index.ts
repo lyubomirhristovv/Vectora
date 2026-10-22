@@ -258,3 +258,9 @@ export interface SearchHistoryEntry {
   isFavorite: boolean;
   lastSearchedAt: string;
 }
+
+export interface FavoriteEntity {
+  entityType: 'queue' | 'topic' | 'subscription';
+  name: string;
+  topicName?: string | null;
+}

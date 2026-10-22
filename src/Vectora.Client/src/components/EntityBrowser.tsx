@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ChevronRight, ChevronDown, Inbox, MessageSquare, Users, Search, Plus, X, Trash2, Pencil, Loader2, Star, History } from 'lucide-react';
-import type { Connection, QueueInfo, TopicInfo, SubscriptionInfo, SelectedEntity, SearchHistoryEntry } from '../types';
-import { createQueue, createTopic, createSubscription, deleteQueue, deleteTopic, deleteSubscription, getSearchHistory, recordSearchHistory, setSearchHistoryFavorite, deleteSearchHistory } from '../api/client';
+import type { Connection, QueueInfo, TopicInfo, SubscriptionInfo, SelectedEntity, SearchHistoryEntry, FavoriteEntity } from '../types';
+import { createQueue, createTopic, createSubscription, deleteQueue, deleteTopic, deleteSubscription, getSearchHistory, recordSearchHistory, setSearchHistoryFavorite, deleteSearchHistory, getFavoriteEntities, addFavoriteEntity, removeFavoriteEntity } from '../api/client';
 import EditEntityDialog from './EditEntityDialog';
 import CreateEntityDialog from './CreateEntityDialog';
 import type { CreateEntityPayload } from './CreateEntityDialog';
@@ -9,6 +9,22 @@ import { formatMessageCount } from '../utils/messageCounts';
 
 const subscriptionKey = (topicName: string, subName: string) => `${topicName}/${subName}`;
 const ENTITY_SEARCH_KEY = '5f0d2c2f-3d64-4f40-9e78-4f1a64d18ef3';
+
+const favoriteKey = (f: FavoriteEntity) =>
+  f.entityType === 'subscription' ? `subscription:${f.topicName}/${f.name}` : `${f.entityType}:${f.name}`;
+
+type SectionId = 'favorites' | 'queues' | 'topics';
+const SECTION_IDS: SectionId[] = ['favorites', 'queues', 'topics'];
+const COLLAPSED_SECTIONS_KEY = 'vectora_collapsed_entity_sections';
+
+const loadCollapsedSections = (): Set<SectionId> => {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(COLLAPSED_SECTIONS_KEY) ?? '[]');
+    return new Set(Array.isArray(parsed) ? SECTION_IDS.filter(id => parsed.includes(id)) : []);
+  } catch {
+    return new Set();
+  }
+};
 
 interface EntityBrowserProps {
   connection: Connection | null;
@@ -20,6 +36,8 @@ interface EntityBrowserProps {
   loading: boolean;
   // When true, the first entity item plays the swipe-demo animation (tour use).
   tourSwipeActive?: boolean;
+  // Demo favorites shown while the tour runs; when set, favorites are neither loaded nor persisted.
+  tourFavorites?: FavoriteEntity[];
 }
 
 type CreateMode = null | 'queue' | 'topic' | 'subscription';
@@ -37,7 +55,7 @@ interface EditTarget {
   topicName?: string;
 }
 
-export default function EntityBrowser({ connection, queues, topics, selectedEntity, onSelectEntity, onRefresh, loading, tourSwipeActive }: EntityBrowserProps) {
+export default function EntityBrowser({ connection, queues, topics, selectedEntity, onSelectEntity, onRefresh, loading, tourSwipeActive, tourFavorites }: EntityBrowserProps) {
   const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
@@ -65,6 +83,70 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
   const [optimisticSubscriptions, setOptimisticSubscriptions] = useState<Array<{ topicName: string; sub: SubscriptionInfo }>>([]);
   const searchHistoryContainerRef = useRef<HTMLDivElement>(null);
   const searchDeletingRef = useRef(false);
+
+  const [favorites, setFavorites] = useState<FavoriteEntity[]>([]);
+  const [expandedFavoriteTopics, setExpandedFavoriteTopics] = useState<Set<string>>(new Set());
+  const [collapsedSections, setCollapsedSections] = useState<Set<SectionId>>(loadCollapsedSections);
+  const connectionId = connection?.id;
+  const connectionIdRef = useRef(connectionId);
+  connectionIdRef.current = connectionId;
+
+  const toggleSection = (id: SectionId) => {
+    setCollapsedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      localStorage.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const tourMode = tourFavorites !== undefined;
+
+  useEffect(() => {
+    setExpandedFavoriteTopics(new Set());
+    if (tourFavorites) {
+      setFavorites(tourFavorites);
+      return;
+    }
+    setFavorites([]);
+    if (connectionId === undefined) return;
+    let cancelled = false;
+    getFavoriteEntities(connectionId)
+      .then(list => { if (!cancelled) setFavorites(list); })
+      .catch(err => console.error('Failed to load favorite entities:', err));
+    return () => { cancelled = true; };
+  }, [connectionId, tourFavorites]);
+
+  const favoriteKeys = useMemo(() => new Set(favorites.map(favoriteKey)), [favorites]);
+
+  const toggleFavorite = async (favorite: FavoriteEntity) => {
+    if (connectionId === undefined) return;
+    const key = favoriteKey(favorite);
+    const wasFavorite = favoriteKeys.has(key);
+    const without = (list: FavoriteEntity[]) => list.filter(f => favoriteKey(f) !== key);
+    const withIt = (list: FavoriteEntity[]) => (list.some(f => favoriteKey(f) === key) ? list : [...list, favorite]);
+    setFavorites(prev => (wasFavorite ? without(prev) : withIt(prev)));
+    if (tourMode) return;
+    try {
+      if (wasFavorite) await removeFavoriteEntity(connectionId, favorite);
+      else await addFavoriteEntity(connectionId, favorite);
+    } catch (err) {
+      console.error('Failed to update favorite entity:', err);
+      if (connectionIdRef.current === connectionId) {
+        setFavorites(prev => (wasFavorite ? withIt(prev) : without(prev)));
+      }
+    }
+  };
+
+  // Deleted entities shouldn't linger as favorites (nor resurface if recreated under the same name).
+  const dropFavorites = (predicate: (f: FavoriteEntity) => boolean) => {
+    if (connectionId === undefined || tourMode) return;
+    const doomed = favorites.filter(predicate);
+    if (doomed.length === 0) return;
+    setFavorites(prev => prev.filter(f => !predicate(f)));
+    doomed.forEach(f => removeFavoriteEntity(connectionId, f).catch(err => console.error('Failed to remove favorite entity:', err)));
+  };
 
   const sortHistoryEntries = (entries: SearchHistoryEntry[]) => {
     return [...entries].sort((a, b) => {
@@ -242,6 +324,123 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
     t.subscriptions.some(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
+  // Favorites resolve against the live entity lists (so counts stay current and entities removed
+  // outside Vectora are hidden) and use the same search rules as the Queues/Topics panels.
+  const favoriteItems = useMemo(() => {
+    const term = searchTerm.toLowerCase();
+    const matches = (name: string) => name.toLowerCase().includes(term);
+    const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+    const queueMap = new Map(mergedQueues.map(q => [q.name, q]));
+    const topicMap = new Map(mergedTopics.map(t => [t.name, t]));
+    const favQueues: QueueInfo[] = [];
+    const favTopics: TopicInfo[] = [];
+    const favSubs: Array<{ topicName: string; name: string; sub: SubscriptionInfo }> = [];
+    for (const f of favorites) {
+      if (f.entityType === 'queue') {
+        const queue = queueMap.get(f.name);
+        if (queue && matches(queue.name)) favQueues.push(queue);
+      } else if (f.entityType === 'topic') {
+        const topic = topicMap.get(f.name);
+        if (topic && (matches(topic.name) || topic.subscriptions.some(s => matches(s.name)))) favTopics.push(topic);
+      } else if (f.topicName) {
+        const topic = topicMap.get(f.topicName);
+        const sub = topic?.subscriptions.find(s => s.name === f.name);
+        if (topic && sub && (matches(sub.name) || matches(topic.name))) {
+          favSubs.push({ topicName: topic.name, name: `${topic.name}/${sub.name}`, sub });
+        }
+      }
+    }
+    return { queues: favQueues.sort(byName), topics: favTopics.sort(byName), subscriptions: favSubs.sort(byName) };
+  }, [favorites, mergedQueues, mergedTopics, searchTerm]);
+  const favoriteCount = favoriteItems.queues.length + favoriteItems.topics.length + favoriteItems.subscriptions.length;
+
+  const toggleFavoriteTopic = (topicName: string) => {
+    setExpandedFavoriteTopics(prev => {
+      const next = new Set(prev);
+      if (next.has(topicName)) next.delete(topicName);
+      else next.add(topicName);
+      return next;
+    });
+  };
+
+  // The tour shows every section expanded regardless of the user's saved collapse state.
+  const isSectionCollapsed = (id: SectionId) => collapsedSections.has(id) && !tourMode;
+
+  const renderSubscription = (topicName: string, sub: SubscriptionInfo, prefix?: string) => {
+    const favorite: FavoriteEntity = { entityType: 'subscription', name: sub.name, topicName };
+    return (
+      <EntityItem
+        key={`${topicName}/${sub.name}`}
+        icon={<Users className="w-4 h-4" />}
+        name={sub.name}
+        prefix={prefix}
+        activeCount={sub.activeMessageCount}
+        deadLetterCount={sub.deadLetterMessageCount}
+        activeCountExact={sub.activeCountExact ?? true}
+        deadLetterCountExact={sub.deadLetterCountExact ?? true}
+        isSelected={selectedEntity?.type === 'subscription' && selectedEntity.name === sub.name && selectedEntity.topicName === topicName}
+        onClick={() => onSelectEntity({ type: 'subscription', name: sub.name, topicName })}
+        onDelete={() => openDeleteDialog('subscription', sub.name, topicName)}
+        onEdit={() => openEditDialog('subscription', sub.name, topicName)}
+        isFavorite={favoriteKeys.has(favoriteKey(favorite))}
+        onToggleFavorite={() => toggleFavorite(favorite)}
+        pending={pendingSubscriptions.has(subscriptionKey(topicName, sub.name))}
+      />
+    );
+  };
+
+  const renderQueue = (queue: QueueInfo, tourProps?: { tourId?: string; tourSwipeAnimate?: boolean }) => {
+    const favorite: FavoriteEntity = { entityType: 'queue', name: queue.name };
+    return (
+      <EntityItem
+        key={queue.name}
+        icon={<Inbox className="w-4 h-4" />}
+        name={queue.name}
+        activeCount={queue.activeMessageCount}
+        deadLetterCount={queue.deadLetterMessageCount}
+        activeCountExact={queue.activeCountExact ?? true}
+        deadLetterCountExact={queue.deadLetterCountExact ?? true}
+        isSelected={selectedEntity?.type === 'queue' && selectedEntity.name === queue.name}
+        onClick={() => onSelectEntity({ type: 'queue', name: queue.name })}
+        onDelete={() => openDeleteDialog('queue', queue.name)}
+        onEdit={() => openEditDialog('queue', queue.name)}
+        isFavorite={favoriteKeys.has(favoriteKey(favorite))}
+        onToggleFavorite={() => toggleFavorite(favorite)}
+        pending={pendingQueues.has(queue.name)}
+        {...tourProps}
+      />
+    );
+  };
+
+  const renderTopic = (topic: TopicInfo, expanded: Set<string>, toggleExpanded: (name: string) => void) => {
+    const favorite: FavoriteEntity = { entityType: 'topic', name: topic.name };
+    return (
+      <div key={topic.name}>
+        <TopicItem
+          name={topic.name}
+          subscriptionCount={topic.subscriptions.length}
+          isExpanded={expanded.has(topic.name)}
+          isSelected={selectedEntity?.type === 'topic' && selectedEntity.name === topic.name}
+          onClick={() => {
+            onSelectEntity({ type: 'topic', name: topic.name });
+            toggleExpanded(topic.name);
+          }}
+          onDelete={() => openDeleteDialog('topic', topic.name)}
+          onEdit={() => openEditDialog('topic', topic.name)}
+          onAddSubscription={() => { setCreateMode('subscription'); setCreateTopicName(topic.name); }}
+          isFavorite={favoriteKeys.has(favoriteKey(favorite))}
+          onToggleFavorite={() => toggleFavorite(favorite)}
+          pending={pendingTopics.has(topic.name)}
+        />
+        {expanded.has(topic.name) && (
+          <div className="ml-6 border-l border-dark-700 pl-2">
+            {topic.subscriptions.map(sub => renderSubscription(topic.name, sub))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const handleCreate = async (payload: CreateEntityPayload) => {
     if (!connection) return;
     if (payload.type === 'subscription' && !payload.topicName) {
@@ -299,18 +498,23 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
       if (target.type === 'queue') {
         await deleteQueue(connection.id, target.name);
         setPendingQueues(prev => new Set(prev).add(target.name));
+        dropFavorites(f => f.entityType === 'queue' && f.name === target.name);
         if (selectedEntity?.type === 'queue' && selectedEntity.name === target.name) {
           onSelectEntity(null);
         }
       } else if (target.type === 'topic') {
         await deleteTopic(connection.id, target.name);
         setPendingTopics(prev => new Set(prev).add(target.name));
+        dropFavorites(f =>
+          (f.entityType === 'topic' && f.name === target.name) ||
+          (f.entityType === 'subscription' && f.topicName === target.name));
         if (selectedEntity?.type === 'topic' && selectedEntity.name === target.name) {
           onSelectEntity(null);
         }
       } else if (target.type === 'subscription' && target.topicName) {
         await deleteSubscription(connection.id, target.topicName, target.name);
         setPendingSubscriptions(prev => new Set(prev).add(subscriptionKey(target.topicName!, target.name)));
+        dropFavorites(f => f.entityType === 'subscription' && f.topicName === target.topicName && f.name === target.name);
         if (selectedEntity?.type === 'subscription' && selectedEntity.name === target.name) {
           onSelectEntity(null);
         }
@@ -473,85 +677,72 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
           </div>
         ) : (
           <>
+            {/* Favorites Section */}
+            <div className="mb-4" data-tour="entity-favorites">
+              <SectionHeader
+                title="Favorites"
+                count={favoriteCount}
+                collapsed={isSectionCollapsed('favorites')}
+                onToggle={() => toggleSection('favorites')}
+              />
+              {!isSectionCollapsed('favorites') && (
+                <>
+                  {favoriteItems.queues.map(queue => renderQueue(queue))}
+                  {favoriteItems.topics.map(topic => renderTopic(topic, expandedFavoriteTopics, toggleFavoriteTopic))}
+                  {favoriteItems.subscriptions.map(({ topicName, sub }) => renderSubscription(topicName, sub, topicName))}
+                  {favoriteCount === 0 && !searchTerm && (
+                    <div className="text-xs text-dark-500 px-2 py-1 italic">Star an entity to pin it here</div>
+                  )}
+                </>
+              )}
+            </div>
+
             {/* Queues Section */}
             <div className="mb-4">
-              <div className="flex items-center justify-between px-2 py-1">
-                <span className="text-xs font-semibold text-dark-400 uppercase tracking-wider">Queues</span>
-                <button onClick={() => setCreateMode('queue')} className="p-1 text-dark-400 hover:text-primary-400 transition-colors" title="Create Queue">
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              {filteredQueues.map((queue, idx) => (
-                <EntityItem
-                  key={queue.name}
-                  icon={<Inbox className="w-4 h-4" />}
-                  name={queue.name}
-                  activeCount={queue.activeMessageCount}
-                  deadLetterCount={queue.deadLetterMessageCount}
-                  activeCountExact={queue.activeCountExact ?? true}
-                  deadLetterCountExact={queue.deadLetterCountExact ?? true}
-                  isSelected={selectedEntity?.type === 'queue' && selectedEntity.name === queue.name}
-                  onClick={() => onSelectEntity({ type: 'queue', name: queue.name })}
-                  onDelete={() => openDeleteDialog('queue', queue.name)}
-                  onEdit={() => openEditDialog('queue', queue.name)}
-                  pending={pendingQueues.has(queue.name)}
-                  tourId={idx === 0 ? 'entity-swipe' : undefined}
-                  tourSwipeAnimate={idx === 0 ? tourSwipeActive : undefined}
-                />
-              ))}
-              {filteredQueues.length === 0 && !searchTerm && (
-                <div className="text-xs text-dark-500 px-2 py-1 italic">No queues</div>
+              <SectionHeader
+                title="Queues"
+                count={filteredQueues.length}
+                collapsed={isSectionCollapsed('queues')}
+                onToggle={() => toggleSection('queues')}
+                action={
+                  <button onClick={() => setCreateMode('queue')} className="p-1 text-dark-400 hover:text-primary-400 transition-colors" title="Create Queue">
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                }
+              />
+              {!isSectionCollapsed('queues') && (
+                <>
+                  {filteredQueues.map((queue, idx) => renderQueue(queue, {
+                    tourId: idx === 0 ? 'entity-swipe' : undefined,
+                    tourSwipeAnimate: idx === 0 ? tourSwipeActive : undefined,
+                  }))}
+                  {filteredQueues.length === 0 && !searchTerm && (
+                    <div className="text-xs text-dark-500 px-2 py-1 italic">No queues</div>
+                  )}
+                </>
               )}
             </div>
 
             {/* Topics Section */}
             <div>
-              <div className="flex items-center justify-between px-2 py-1">
-                <span className="text-xs font-semibold text-dark-400 uppercase tracking-wider">Topics</span>
-                <button onClick={() => setCreateMode('topic')} className="p-1 text-dark-400 hover:text-primary-400 transition-colors" title="Create Topic">
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              {filteredTopics.map(topic => (
-                <div key={topic.name}>
-                  <TopicItem
-                    name={topic.name}
-                    subscriptionCount={topic.subscriptions.length}
-                    isExpanded={expandedTopics.has(topic.name)}
-                    isSelected={selectedEntity?.type === 'topic' && selectedEntity.name === topic.name}
-                    onClick={() => {
-                      onSelectEntity({ type: 'topic', name: topic.name });
-                      toggleTopic(topic.name);
-                    }}
-                    onDelete={() => openDeleteDialog('topic', topic.name)}
-                    onEdit={() => openEditDialog('topic', topic.name)}
-                    onAddSubscription={() => { setCreateMode('subscription'); setCreateTopicName(topic.name); }}
-                    pending={pendingTopics.has(topic.name)}
-                  />
-                  {expandedTopics.has(topic.name) && (
-                    <div className="ml-6 border-l border-dark-700 pl-2">
-                      {topic.subscriptions.map(sub => (
-                        <EntityItem
-                          key={sub.name}
-                          icon={<Users className="w-4 h-4" />}
-                          name={sub.name}
-                          activeCount={sub.activeMessageCount}
-                          deadLetterCount={sub.deadLetterMessageCount}
-                          activeCountExact={sub.activeCountExact ?? true}
-                          deadLetterCountExact={sub.deadLetterCountExact ?? true}
-                          isSelected={selectedEntity?.type === 'subscription' && selectedEntity.name === sub.name && selectedEntity.topicName === topic.name}
-                          onClick={() => onSelectEntity({ type: 'subscription', name: sub.name, topicName: topic.name })}
-                          onDelete={() => openDeleteDialog('subscription', sub.name, topic.name)}
-                          onEdit={() => openEditDialog('subscription', sub.name, topic.name)}
-                          pending={pendingSubscriptions.has(subscriptionKey(topic.name, sub.name))}
-                        />
-                      ))}
-                    </div>
+              <SectionHeader
+                title="Topics"
+                count={filteredTopics.length}
+                collapsed={isSectionCollapsed('topics')}
+                onToggle={() => toggleSection('topics')}
+                action={
+                  <button onClick={() => setCreateMode('topic')} className="p-1 text-dark-400 hover:text-primary-400 transition-colors" title="Create Topic">
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                }
+              />
+              {!isSectionCollapsed('topics') && (
+                <>
+                  {filteredTopics.map(topic => renderTopic(topic, expandedTopics, toggleTopic))}
+                  {filteredTopics.length === 0 && !searchTerm && (
+                    <div className="text-xs text-dark-500 px-2 py-1 italic">No topics</div>
                   )}
-                </div>
-              ))}
-              {filteredTopics.length === 0 && !searchTerm && (
-                <div className="text-xs text-dark-500 px-2 py-1 italic">No topics</div>
+                </>
               )}
             </div>
           </>
@@ -620,9 +811,69 @@ export default function EntityBrowser({ connection, queues, topics, selectedEnti
   );
 }
 
+interface SectionHeaderProps {
+  title: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  action?: React.ReactNode;
+}
+
+function SectionHeader({ title, count, collapsed, onToggle, action }: SectionHeaderProps) {
+  return (
+    <div className="flex items-center justify-between px-2 py-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex items-center gap-1 text-xs font-semibold text-dark-400 hover:text-dark-200 uppercase tracking-wider transition-colors"
+        aria-expanded={!collapsed}
+        title={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+      >
+        {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        <span>{title}</span>
+        <span className="font-normal text-dark-500 normal-case tracking-normal">({count})</span>
+      </button>
+      {action}
+    </div>
+  );
+}
+
+interface FavoriteStarProps {
+  isFavorite: boolean;
+  onToggle?: () => void;
+  name: string;
+}
+
+function FavoriteStar({ isFavorite, onToggle, name }: FavoriteStarProps) {
+  // Revealed on row hover (or keyboard focus); always shown on touch devices, which can't hover.
+  const visibility = 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100';
+  const icon = (
+    <Star className={`w-3.5 h-3.5 ${isFavorite ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_4px_rgba(250,204,21,0.8)]' : ''}`} />
+  );
+  if (!onToggle) {
+    return <span className={`p-0.5 text-dark-500 ${visibility}`}>{icon}</span>;
+  }
+  return (
+    <button
+      type="button"
+      // Keep the press from starting the row's swipe gesture or selecting the entity.
+      onPointerDown={e => e.stopPropagation()}
+      onClick={e => { e.stopPropagation(); onToggle(); }}
+      className={`p-0.5 rounded transition-[color,opacity] ${visibility} ${isFavorite ? 'text-yellow-400' : 'text-dark-500 hover:text-yellow-400'}`}
+      title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+      aria-label={isFavorite ? `Remove ${name} from favorites` : `Add ${name} to favorites`}
+      aria-pressed={isFavorite}
+    >
+      {icon}
+    </button>
+  );
+}
+
 interface EntityItemProps {
   icon: React.ReactNode;
   name: string;
+  // Muted parent path shown before the name (e.g. the topic of a favorited subscription).
+  prefix?: string;
   activeCount: number;
   deadLetterCount: number;
   // False when the count is a floor rather than a total, rendered "N+".
@@ -632,18 +883,27 @@ interface EntityItemProps {
   onClick: () => void;
   onDelete: () => void;
   onEdit?: () => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
   pending?: boolean;
   tourId?: string;
   // When true, plays an automatic back-and-forth swipe animation to demo the gesture.
   tourSwipeAnimate?: boolean;
 }
 
-function EntityItem({ icon, name, activeCount, deadLetterCount, isSelected, onClick, onDelete, onEdit, activeCountExact = true, deadLetterCountExact = true, pending, tourId, tourSwipeAnimate }: EntityItemProps) {
+function EntityItem({ icon, name, prefix, activeCount, deadLetterCount, isSelected, onClick, onDelete, onEdit, activeCountExact = true, deadLetterCountExact = true, isFavorite = false, onToggleFavorite, pending, tourId, tourSwipeAnimate }: EntityItemProps) {
+  const label = (
+    <span className="flex-1 truncate text-sm" title={prefix ? `${prefix}/${name}` : name}>
+      {prefix && <span className="text-dark-500">{prefix}/</span>}
+      {name}
+    </span>
+  );
   if (pending) {
     return (
       <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg opacity-60 cursor-not-allowed select-none" aria-busy>
         <Loader2 className="w-4 h-4 animate-spin text-primary-400" />
-        <span className="flex-1 truncate text-sm text-dark-400">{name}</span>
+        <span className="flex-1 truncate text-sm text-dark-400">{prefix && `${prefix}/`}{name}</span>
+        <FavoriteStar isFavorite={isFavorite} name={name} />
         <span className="text-xs bg-dark-700 px-1.5 py-0.5 rounded text-dark-500">{formatMessageCount({ count: activeCount, isExact: activeCountExact })}</span>
         <span className="text-xs bg-red-500/10 text-red-300/60 px-1.5 py-0.5 rounded">{formatMessageCount({ count: deadLetterCount, isExact: deadLetterCountExact })}</span>
       </div>
@@ -870,7 +1130,7 @@ function EntityItem({ icon, name, activeCount, deadLetterCount, isSelected, onCl
       {/* Main content - draggable */}
       <div
         ref={contentRef}
-        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
+        className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
           isSelected
             ? 'bg-[#21314e] text-primary-400'
             : (showActions ? 'bg-dark-800 text-dark-300' : 'hover:bg-dark-700 text-dark-300')
@@ -883,7 +1143,8 @@ function EntityItem({ icon, name, activeCount, deadLetterCount, isSelected, onCl
         onClick={handleClick}
       >
         {icon}
-        <span className="flex-1 truncate text-sm">{name}</span>
+        {label}
+        <FavoriteStar isFavorite={isFavorite} onToggle={onToggleFavorite} name={name} />
         <span className="text-xs bg-dark-600 px-1.5 py-0.5 rounded">{formatMessageCount({ count: activeCount, isExact: activeCountExact })}</span>
         <span className={`text-xs px-1.5 py-0.5 rounded ${deadLetterCount > 0 ? 'bg-red-500/20 text-red-400' : 'bg-red-500/10 text-red-300'}`}>
           {formatMessageCount({ count: deadLetterCount, isExact: deadLetterCountExact })}
@@ -902,16 +1163,19 @@ interface TopicItemProps {
   onDelete: () => void;
   onEdit?: () => void;
   onAddSubscription: () => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
   pending?: boolean;
 }
 
-function TopicItem({ name, subscriptionCount, isExpanded, isSelected, onClick, onDelete, onEdit, onAddSubscription, pending }: TopicItemProps) {
+function TopicItem({ name, subscriptionCount, isExpanded, isSelected, onClick, onDelete, onEdit, onAddSubscription, isFavorite = false, onToggleFavorite, pending }: TopicItemProps) {
   if (pending) {
     return (
       <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg opacity-60 cursor-not-allowed select-none" aria-busy>
         <ChevronRight className="w-4 h-4 text-dark-500" />
         <Loader2 className="w-4 h-4 animate-spin text-primary-400" />
         <span className="flex-1 truncate text-sm text-dark-400">{name}</span>
+        <FavoriteStar isFavorite={isFavorite} name={name} />
         <span className="text-xs text-dark-500">{subscriptionCount}</span>
       </div>
     );
@@ -946,11 +1210,13 @@ function TopicItem({ name, subscriptionCount, isExpanded, isSelected, onClick, o
     onDelete={onDelete}
     onEdit={onEdit}
     onAddSubscription={onAddSubscription}
+    isFavorite={isFavorite}
+    onToggleFavorite={onToggleFavorite}
   />;
 }
 
 // Swipeable version of TopicItem (for non-emulator connections)
-function SwipeableTopicItem({ name, subscriptionCount, isExpanded, isSelected, onClick, onDelete, onEdit, onAddSubscription }: Omit<TopicItemProps, 'isEmulator'>) {
+function SwipeableTopicItem({ name, subscriptionCount, isExpanded, isSelected, onClick, onDelete, onEdit, onAddSubscription, isFavorite = false, onToggleFavorite }: Omit<TopicItemProps, 'isEmulator'>) {
   const [isOpen, setIsOpen] = useState(false);
   const [, forceUpdate] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1085,7 +1351,7 @@ function SwipeableTopicItem({ name, subscriptionCount, isExpanded, isSelected, o
       {/* Main content - draggable */}
       <div
         ref={contentRef}
-        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
+        className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
           isSelected
             ? 'bg-[#21314e] text-primary-400'
             : (showActions ? 'bg-dark-800 text-dark-300' : 'hover:bg-dark-700 text-dark-300')
@@ -1100,6 +1366,7 @@ function SwipeableTopicItem({ name, subscriptionCount, isExpanded, isSelected, o
         {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         <MessageSquare className="w-4 h-4" />
         <span className="flex-1 truncate text-sm">{name}</span>
+        <FavoriteStar isFavorite={isFavorite} onToggle={onToggleFavorite} name={name} />
         <button
           onClick={(e) => { e.stopPropagation(); onAddSubscription(); }}
           className="p-0.5 text-dark-500 hover:text-primary-400 transition-colors"

@@ -13,6 +13,7 @@ public class VectoraDbContext : DbContext
     public DbSet<Setting> Settings { get; set; }
     public DbSet<MessageTemplate> MessageTemplates { get; set; }
     public DbSet<SearchHistoryEntry> SearchHistoryEntries { get; set; }
+    public DbSet<FavoriteEntity> FavoriteEntities { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -47,6 +48,19 @@ public class VectoraDbContext : DbContext
             entity.Property(e => e.Term).IsRequired().HasMaxLength(500).UseCollation("NOCASE");
             entity.HasIndex(e => new { e.SearchKey, e.Term }).IsUnique();
             entity.HasIndex(e => new { e.SearchKey, e.IsFavorite, e.LastSearchedAt });
+        });
+
+        modelBuilder.Entity<FavoriteEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.EntityName).IsRequired().HasMaxLength(260);
+            entity.Property(e => e.TopicName).IsRequired().HasMaxLength(260);
+            entity.HasIndex(e => new { e.ConnectionId, e.EntityType, e.TopicName, e.EntityName }).IsUnique();
+            entity.HasOne<ServiceBusConnection>()
+                .WithMany()
+                .HasForeignKey(e => e.ConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

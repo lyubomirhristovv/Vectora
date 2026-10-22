@@ -4,7 +4,7 @@ import type {
   QueueProperties, TopicProperties, SubscriptionProperties,
   UpdateQueueRequest, UpdateTopicRequest, UpdateSubscriptionRequest,
   MessageTemplate, SaveMessageTemplateRequest,
-  SessionScanResult, SessionMessageScanResult, SearchHistoryEntry
+  SessionScanResult, SessionMessageScanResult, SearchHistoryEntry, FavoriteEntity
 } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -222,3 +222,14 @@ export const setSearchHistoryFavorite = (searchKey: string, term: string, isFavo
   fetchApi<SearchHistoryEntry>('/search-history/favorite', { method: 'PUT', body: JSON.stringify({ searchKey, term, isFavorite }) });
 export const deleteSearchHistory = (searchKey: string, term: string) =>
   fetchApi<void>(`/search-history?searchKey=${encodeURIComponent(searchKey)}&term=${encodeURIComponent(term)}`, { method: 'DELETE' });
+
+// Favorite entities
+export const getFavoriteEntities = (connectionId: number) =>
+  fetchApi<FavoriteEntity[]>(`/connections/${connectionId}/favorites`);
+export const addFavoriteEntity = (connectionId: number, favorite: FavoriteEntity) =>
+  fetchApi<FavoriteEntity>(`/connections/${connectionId}/favorites`, { method: 'PUT', body: JSON.stringify(favorite) });
+export const removeFavoriteEntity = (connectionId: number, favorite: FavoriteEntity) => {
+  const params = new URLSearchParams({ entityType: favorite.entityType, name: favorite.name });
+  if (favorite.topicName) params.set('topicName', favorite.topicName);
+  return fetchApi<void>(`/connections/${connectionId}/favorites?${params}`, { method: 'DELETE' });
+};
