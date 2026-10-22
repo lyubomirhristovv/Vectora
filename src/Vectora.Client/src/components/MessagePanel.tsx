@@ -219,6 +219,19 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
     onMessagesLoaded?.(entity, loaded, reachedEnd, deadLetter);
   };
 
+  // Session scans browse the whole sub-queue (every session) from the first message, so their
+  // running scanned total is an entity count just like the flat list's. The flat-list reporter
+  // can't be used here: it ignores session view, where `messages` holds only one session.
+  const reportSessionScan = (gen: number, entity: SelectedEntity, deadLetter: boolean, scanned: number, reachedEnd: boolean, reset: boolean) => {
+    if (gen !== loadGenRef.current || tourDummyMessages !== undefined) return;
+    onMessagesLoaded?.(entity, scanned, reachedEnd, deadLetter);
+    // Same as a full first page in the flat list: a floor only, so have the server recount and
+    // drop a stale, larger number it may still be holding.
+    if (reset && !reachedEnd && connection?.isEmulator) {
+      onUpdateEntityCount?.(entity, true);
+    }
+  };
+
   const loadMessages = async () => {
     if (!connection || !selectedEntity) return;
     const entity = selectedEntity;
@@ -511,6 +524,10 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
   // `reset` starts a fresh scan; otherwise it continues from the last sequence number.
   const scanSessions = async (reset: boolean) => {
     if (!connection || !selectedEntity) return;
+    const entity = selectedEntity;
+    const deadLetter = showDeadLetter;
+    const gen = loadGenRef.current;
+    const scannedBefore = reset ? 0 : sessionScannedTotal;
     if (reset) {
       setSessionsLoading(true);
       setSessions([]);
@@ -532,6 +549,7 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
       setSessionScannedTotal(prev => (reset ? 0 : prev) + result.scannedCount);
       setSessionsReachedEnd(result.reachedEnd);
       setSessionCursor(result.lastSequenceNumber);
+      reportSessionScan(gen, entity, deadLetter, scannedBefore + result.scannedCount, result.reachedEnd, reset);
     } catch (error) {
       console.error('Failed to scan sessions:', error);
     } finally {
@@ -543,6 +561,10 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
   // Peek a page and keep only the chosen session's messages, paging the same way.
   const loadSessionMessages = async (sessionId: string, reset: boolean) => {
     if (!connection || !selectedEntity) return;
+    const entity = selectedEntity;
+    const deadLetter = showDeadLetter;
+    const gen = loadGenRef.current;
+    const scannedBefore = reset ? 0 : sessionMsgScannedTotal;
     if (reset) {
       setSessionMsgLoading(true);
       setMessages([]);
@@ -565,6 +587,8 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
       setSessionMsgScannedTotal(prev => (reset ? 0 : prev) + result.scannedCount);
       setSessionMsgReachedEnd(result.reachedEnd);
       setSessionMsgCursor(result.lastSequenceNumber);
+      // The scan filters by session but still browses every message, so this is the entity count.
+      reportSessionScan(gen, entity, deadLetter, scannedBefore + result.scannedCount, result.reachedEnd, reset);
     } catch (error) {
       console.error('Failed to load session messages:', error);
     } finally {
