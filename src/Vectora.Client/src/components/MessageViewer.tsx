@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Copy, Check, FileJson, Code, FileInput } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import type { ServiceBusMessage } from '../types';
-import { formatDateTime, useDateFormat } from '../utils/dateFormat';
+import DateTimeText from './DateTimeText';
 
 export type ViewMode = 'body' | 'properties';
 
@@ -20,7 +20,6 @@ interface MessageViewerProps {
 export default function MessageViewer({ message, onUseAsTemplate, viewMode: controlledViewMode, onViewModeChange }: MessageViewerProps) {
   const [internalViewMode, setInternalViewMode] = useState<ViewMode>('body');
   const [copied, setCopied] = useState(false);
-  useDateFormat(); // re-render timestamp rows when the date format setting changes
 
   // Use controlled mode if props are provided, otherwise use internal state
   const viewMode = controlledViewMode ?? internalViewMode;
@@ -113,10 +112,10 @@ export default function MessageViewer({ message, onUseAsTemplate, viewMode: cont
               <PropertyRow label="Sequence Number" value={message.sequenceNumber.toString()} />
               <PropertyRow label="State" value={message.state} />
               {message.scheduledEnqueueTime && (
-                <PropertyRow label="Schedule" value={formatDateTime(message.scheduledEnqueueTime)} />
+                <PropertyRow label="Schedule" value={<DateTimeText value={message.scheduledEnqueueTime} />} />
               )}
               {message.state !== 'Scheduled' && (
-                <PropertyRow label="Enqueued Time" value={formatDateTime(message.enqueuedTime)} />
+                <PropertyRow label="Enqueued Time" value={<DateTimeText value={message.enqueuedTime} />} />
               )}
               <PropertyRow label="Content Type" value={message.contentType} />
               <PropertyRow label="Body Size" value={bodySize} />
@@ -127,7 +126,7 @@ export default function MessageViewer({ message, onUseAsTemplate, viewMode: cont
               <PropertyRow label="Reply To Session ID" value={message.replyToSessionId} />
               <PropertyRow label="To" value={message.to} />
               <PropertyRow label="Time To Live" value={message.timeToLive} />
-              {expiresAt && <PropertyRow label="Expires At" value={formatDateTime(expiresAt)} />}
+              {expiresAt && <PropertyRow label="Expires At" value={<DateTimeText value={expiresAt} />} />}
               <PropertyRow label="Delivery Count" value={message.deliveryCount.toString()} />
             </PropertySection>
 
@@ -192,7 +191,7 @@ function PropertySection({ title, children }: { title: string; children: React.R
   );
 }
 
-function PropertyRow({ label, value }: { label: string; value?: string }) {
+function PropertyRow({ label, value }: { label: string; value?: React.ReactNode }) {
   if (!value) return null;
   return (
     <div className="grid grid-cols-[140px_minmax(0,1fr)] gap-3 px-3 py-2">

@@ -53,19 +53,24 @@ function pad2(n: number): string {
   return n.toString().padStart(2, '0');
 }
 
-function formatWithPattern(d: Date, pattern: string): string {
-  const hours24 = d.getHours();
+function formatWithPattern(d: Date, pattern: string, utc = false): string {
+  const year = utc ? d.getUTCFullYear() : d.getFullYear();
+  const month = utc ? d.getUTCMonth() : d.getMonth();
+  const day = utc ? d.getUTCDate() : d.getDate();
+  const hours24 = utc ? d.getUTCHours() : d.getHours();
+  const minutes = utc ? d.getUTCMinutes() : d.getMinutes();
+  const seconds = utc ? d.getUTCSeconds() : d.getSeconds();
   const hours12 = hours24 % 12 || 12;
   return pattern.replace(/yyyy|MMM|MM|dd|HH|hh|mm|ss|a/g, token => {
     switch (token) {
-      case 'yyyy': return d.getFullYear().toString();
-      case 'MMM': return MONTHS[d.getMonth()];
-      case 'MM': return pad2(d.getMonth() + 1);
-      case 'dd': return pad2(d.getDate());
+      case 'yyyy': return year.toString();
+      case 'MMM': return MONTHS[month];
+      case 'MM': return pad2(month + 1);
+      case 'dd': return pad2(day);
       case 'HH': return pad2(hours24);
       case 'hh': return pad2(hours12);
-      case 'mm': return pad2(d.getMinutes());
-      case 'ss': return pad2(d.getSeconds());
+      case 'mm': return pad2(minutes);
+      case 'ss': return pad2(seconds);
       case 'a': return hours24 < 12 ? 'AM' : 'PM';
       default: return token;
     }
@@ -74,13 +79,17 @@ function formatWithPattern(d: Date, pattern: string): string {
 
 /**
  * Formats a timestamp with the user's chosen format (defaults to the stored preference).
+ * Renders in the browser's local timezone unless `utc` is set, in which case the
+ * UTC wall-clock time is shown with a " UTC" suffix.
  * Components should call useDateFormat() so they re-render when the preference changes.
  */
-export function formatDateTime(value: string | Date, format?: string): string {
+export function formatDateTime(value: string | Date, format?: string, utc = false): string {
   const d = value instanceof Date ? value : new Date(value);
   if (isNaN(d.getTime())) return String(value);
   const fmt = format ?? currentFormat;
-  return fmt === SYSTEM_FORMAT ? d.toLocaleString() : formatWithPattern(d, fmt);
+  if (!utc) return fmt === SYSTEM_FORMAT ? d.toLocaleString() : formatWithPattern(d, fmt);
+  const text = fmt === SYSTEM_FORMAT ? d.toLocaleString(undefined, { timeZone: 'UTC' }) : formatWithPattern(d, fmt, true);
+  return `${text} UTC`;
 }
 
 /** Strips time tokens from a date-time pattern, leaving only the date portion. */

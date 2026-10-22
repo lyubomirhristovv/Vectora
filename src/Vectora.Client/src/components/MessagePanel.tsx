@@ -4,7 +4,7 @@ import type { Connection, QueueInfo, TopicInfo, SelectedEntity, ServiceBusMessag
 import { peekQueueMessages, peekSubscriptionMessages, receiveQueueMessages, receiveSubscriptionMessages, returnQueueDeadLetter, returnSubscriptionDeadLetter, returnQueueDeadLetterBatch, returnSubscriptionDeadLetterBatch, receiveQueueDeadLetterBatch, receiveSubscriptionDeadLetterBatch, deleteQueueMessagesBatch, deleteSubscriptionMessagesBatch, cancelQueueScheduledBatch, scanQueueSessions, scanSubscriptionSessions, peekQueueSessionMessages, peekSubscriptionSessionMessages, getSearchHistory, recordSearchHistory, setSearchHistoryFavorite, deleteSearchHistory } from '../api/client';
 import MessageViewer from './MessageViewer';
 import SendMessageDialog from './SendMessageDialog';
-import { formatDateTime, useDateFormat } from '../utils/dateFormat';
+import DateTimeText from './DateTimeText';
 import { formatMessageCount } from '../utils/messageCounts';
 import DatePicker from './DatePicker';
 
@@ -78,7 +78,6 @@ function sortSearchHistoryEntries(entries: SearchHistoryEntry[]) {
 }
 
 export default function MessagePanel({ connection, selectedEntity, queues, topics, onUpdateEntityCount, onMessagesLoaded, isMobile = false, onOpenSidebar, tourDummyMessages, tourForcedViewMode }: MessagePanelProps) {
-  useDateFormat(); // re-render session timestamps when the date format setting changes
   // Mobile view state: 'list' shows message list, 'detail' shows message detail
   const [mobileView, setMobileView] = useState<'list' | 'detail'>('list');
   const [messages, setMessages] = useState<ServiceBusMessage[]>([]);
@@ -1175,7 +1174,7 @@ export default function MessagePanel({ connection, selectedEntity, queues, topic
                           <Layers className="w-4 h-4 text-primary-400 flex-shrink-0" />
                           <div className="min-w-0">
                             <div className="text-sm font-medium text-white truncate">{s.sessionId || '(no session id)'}</div>
-                            {s.lastEnqueuedTime && <div className="text-xs text-dark-500">Last: {formatDateTime(s.lastEnqueuedTime)}</div>}
+                            {s.lastEnqueuedTime && <div className="text-xs text-dark-500">Last: <DateTimeText value={s.lastEnqueuedTime} /></div>}
                           </div>
                         </div>
                         <span className="text-xs bg-dark-600 px-2 py-1 rounded flex-shrink-0" title={sessionsReachedEnd ? undefined : 'At least this many (scan not finished)'}>
@@ -1582,7 +1581,7 @@ function MessageListItem({ message, isSelected, isChecked, selectMode, onClick, 
   const scheduledBadge = isScheduled ? (
     <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">
       <Clock className="w-3 h-3" />
-      {message.scheduledEnqueueTime ? formatDateTime(message.scheduledEnqueueTime) : 'Scheduled'}
+      {message.scheduledEnqueueTime ? <DateTimeText value={message.scheduledEnqueueTime} /> : 'Scheduled'}
     </span>
   ) : null;
 
@@ -1616,7 +1615,7 @@ function MessageListItem({ message, isSelected, isChecked, selectMode, onClick, 
               <span className="text-xs text-dark-400">#{message.sequenceNumber}</span>
               {scheduledBadge}
             </div>
-            {!isScheduled && <span className="text-xs text-dark-500 flex-shrink-0">{formatDateTime(message.enqueuedTime)}</span>}
+            {!isScheduled && <DateTimeText value={message.enqueuedTime} className="text-xs text-dark-500 flex-shrink-0" />}
           </div>
           {message.subject && <div className="text-sm font-medium text-white mb-1">{message.subject}</div>}
           <div className="text-sm text-dark-300 truncate">{bodyPreview}</div>
@@ -1635,7 +1634,7 @@ function MessageListItem({ message, isSelected, isChecked, selectMode, onClick, 
           {scheduledBadge}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {!isScheduled && <span className="text-xs text-dark-500">{formatDateTime(message.enqueuedTime)}</span>}
+          {!isScheduled && <DateTimeText value={message.enqueuedTime} className="text-xs text-dark-500" />}
           {showDeadLetter && (
             <button
               type="button"
