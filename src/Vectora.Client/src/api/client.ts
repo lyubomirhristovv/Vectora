@@ -13,6 +13,33 @@ function getToken(): string | null {
   return localStorage.getItem('vectora_token');
 }
 
+// The backend returns errors as `{ error, details }` (details only in Development).
+// Turn that into a plain, human-readable message; fall back to the raw body otherwise.
+function extractErrorMessage(body: string): string {
+  if (!body) return '';
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === 'object') {
+      const { error, details, title, detail } = parsed as Record<string, unknown>;
+      const message = typeof error === 'string' && error ? error
+        : typeof title === 'string' && title ? title
+        : '';
+      const extra = typeof details === 'string' && details ? details
+        : typeof detail === 'string' && detail ? detail
+        : '';
+      if (message) {
+        return extra && extra !== message ? `${message} (${extra})` : message;
+      }
+      if (extra) return extra;
+    } else if (typeof parsed === 'string' && parsed) {
+      return parsed;
+    }
+  } catch {
+    // Not JSON — use the raw text below.
+  }
+  return body;
+}
+
 async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -35,7 +62,7 @@ async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> 
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(error || `HTTP ${response.status}`);
+    throw new Error(extractErrorMessage(error) || `HTTP ${response.status}`);
   }
 
   if (response.status === 204) {
