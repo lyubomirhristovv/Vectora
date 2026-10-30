@@ -40,6 +40,12 @@ public class ExceptionHandlingMiddleware
             _logger.LogWarning("Service Bus entity not found: {Message}", sbEx.Message);
             await HandleExceptionAsync(context, sbEx, HttpStatusCode.NotFound, "Queue, topic, or subscription not found");
         }
+        catch (ServiceBusException sbEx) when (sbEx.Reason == ServiceBusFailureReason.MessagingEntityAlreadyExists)
+        {
+            _logger.LogWarning("Service Bus entity already exists: {Message}", sbEx.Message);
+            await HandleExceptionAsync(context, sbEx, HttpStatusCode.Conflict,
+                "An entity with this name already exists. Queue and topic names must be unique within the namespace.");
+        }
         catch (UnauthorizedAccessException uaEx)
         {
             // A bad connection-string key surfaces here (the Service Bus SDK throws this when token
