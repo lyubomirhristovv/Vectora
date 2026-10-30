@@ -29,7 +29,7 @@ export function parseDuration(iso: string): string {
 export function formatDuration(input: string): string {
   // Handle "Never" - return TimeSpan.MaxValue
   if (input.toLowerCase() === "never") {
-    return `${MAX_TIMESPAN_DAYS}.00:00:00`;
+    return "10675199.02:48:05.4775807";
   }
   // Try to parse human format like "14d" or "5m" or "1d 2h 30m"
   let totalSeconds = 0;
